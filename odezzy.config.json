@@ -1,0 +1,23 @@
+{
+  "servers": [
+    {
+      "name": "canary-server",
+      "command": "npx",
+      "args": [
+        "tsx",
+        "canary-server/server.ts"
+      ],
+      "env": {}
+    }
+  ],
+  "scanOptions": {
+    "maxConcurrency": 3,
+    "timeoutMs": 30000,
+    "probeCategories": [
+      "undeclared-params",
+      "prompt-injection",
+      "leaked-secrets",
+      "schema-mismatch"
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+[pr_reviewer]
+auto_review = true
+extra_instructions = "Focus on security-critical code paths, MCP tool schemas, type safety, and error handling"
+
+[pr_code_suggestions]
+auto_code_suggestions = true

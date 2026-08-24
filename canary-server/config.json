@@ -1,0 +1,7 @@
+{
+  "_comment": "Seeded canary secret — FAKE. Odezzy AI issue #3: a realistic-looking leaked API key shipped in a checked-in config, the pattern GitGuardian-style scanners flag. This key is not valid and grants access to nothing.",
+  "service": "docs-search-index",
+  "apiKey": "sk_live_51N7f9aKcanaryFAKE0000000000000000000",
+  "endpoint": "https://internal-docs.example.invalid/v1/index",
+  "notesDir": "./notes"
+}
