@@ -3,21 +3,18 @@ import { DriftDetector } from '../src/analysis/drift-detector.js';
 import { EmbeddingBaselineStore } from '../src/persistence/embedding-baseline-store.js';
 import type { MCPToolSchema, OdezzyConfig } from '../src/types/index.js';
 
-// Mock the Google Generative AI
-vi.mock('@google/generative-ai', () => ({
-  GoogleGenerativeAI: vi.fn().mockImplementation(() => ({
-    getGenerativeModel: vi.fn().mockReturnValue({
-      embedContent: vi.fn().mockResolvedValue({
-        embedding: { values: Array(768).fill(0).map((_, i) => Math.sin(i * 0.1)) },
-      }),
-    }),
-  })),
+// 1. Mock the unified @google/genai SDK (Vertex AI + ADC) so we can manipulate it in tests
+const mockEmbedContent = vi.fn();
+const mockGenAiInstance = { models: { embedContent: mockEmbedContent } };
+
+vi.mock('@google/genai', () => ({
+  GoogleGenAI: vi.fn().mockImplementation(() => mockGenAiInstance),
 }));
 
-// Mock the baseline store
+// 2. Mock the baseline store
 vi.mock('../src/persistence/embedding-baseline-store.js');
 
-// Mock the attestation ledger (DriftDetector now calls ledger.revoke on drift)
+// 3. Mock the attestation ledger (DriftDetector now calls ledger.revoke on drift)
 vi.mock('../src/attestation/attestation-ledger.js', () => ({
   AttestationLedger: vi.fn().mockImplementation(() => ({
     revoke: vi.fn().mockResolvedValue(null),
@@ -29,7 +26,8 @@ vi.mock('../src/attestation/attestation-ledger.js', () => ({
 
 const mockConfig: OdezzyConfig = {
   servers: [],
-  geminiApiKey: 'test-key',
+  gcpProjectId: 'test-project',
+  gcpLocation: 'us-central1',
   scanOptions: { maxConcurrency: 3, timeoutMs: 30000, probeCategories: [] },
 };
 
@@ -45,6 +43,12 @@ describe('DriftDetector', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    
+    // Reset default mock behavior for embedding
+    mockEmbedContent.mockResolvedValue({
+      embeddings: [{ values: Array(768).fill(0).map((_, i) => Math.sin(i * 0.1)) }],
+    });
+
     mockStore = {
       load: vi.fn().mockResolvedValue(null),
       save: vi.fn().mockResolvedValue(undefined),
@@ -53,8 +57,8 @@ describe('DriftDetector', () => {
     detector = new DriftDetector(mockConfig);
   });
 
-  it('throws if no geminiApiKey provided', () => {
-    expect(() => new DriftDetector({ ...mockConfig, geminiApiKey: undefined })).toThrow();
+  it('throws if no gcpProjectId provided', () => {
+    expect(() => new DriftDetector({ ...mockConfig, gcpProjectId: undefined })).toThrow();
   });
 
   it('establishes baseline on first scan (no existing baseline)', async () => {
@@ -81,15 +85,9 @@ describe('DriftDetector', () => {
 
   it('detects drift when description changes significantly', async () => {
     // Return a very different embedding to ensure cosine distance exceeds threshold
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    vi.mocked(GoogleGenerativeAI).mockImplementation(() => ({
-      getGenerativeModel: vi.fn().mockReturnValue({
-        embedContent: vi.fn().mockResolvedValue({
-          embedding: { values: Array(768).fill(0).map((_, i) => Math.cos(i * 3.14)) },
-        }),
-      }),
-    }) as any);
-    detector = new DriftDetector(mockConfig);
+    mockEmbedContent.mockResolvedValueOnce({
+      embeddings: [{ values: Array(768).fill(0).map((_, i) => Math.cos(i * 3.14)) }],
+    });
 
     mockStore.load.mockResolvedValue({
       toolName: 'test_tool',
@@ -98,6 +96,7 @@ describe('DriftDetector', () => {
       embedding: Array(768).fill(0).map((_, i) => Math.sin(i * 0.1)),
       scannedAt: new Date().toISOString(),
     });
+    
     const findings = await detector.checkDrift(mockTool, 'test-server');
     expect(findings.length).toBeGreaterThan(0);
     expect(findings[0].category).toBe('semantic-drift');
@@ -110,20 +109,33 @@ describe('DriftDetector', () => {
       { tool: mockTool, serverName: 'server-1' },
       { tool: { ...mockTool, name: 'tool_2', description: 'Another tool' }, serverName: 'server-1' },
     ];
-    const findings = await detector.batchCheckDrift(tools);
+    
+    // Fix: batchCheckDrift returns an object { findings, erroredTools }
+    const { findings, erroredTools } = await detector.batchCheckDrift(tools);
     expect(mockStore.save).toHaveBeenCalledTimes(2);
   });
 
   it('handles embed failures gracefully in batch mode', async () => {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    vi.mocked(GoogleGenerativeAI).mockImplementation(() => ({
-      getGenerativeModel: vi.fn().mockReturnValue({
-        embedContent: vi.fn().mockRejectedValue(new Error('API rate limited')),
-      }),
-    }) as any);
-    detector = new DriftDetector(mockConfig);
     mockStore.load.mockResolvedValue(null);
-    const findings = await detector.batchCheckDrift([{ tool: mockTool, serverName: 'test' }]);
-    expect(findings).toHaveLength(0); // graceful failure, no crash
+
+    // Force embedContent to reject/fail for this specific test
+    mockEmbedContent.mockRejectedValueOnce(new Error('Embedding API rate limit or outage'));
+
+    const result = await detector.batchCheckDrift([
+      { tool: mockTool, serverName: 'test-server' }
+    ]);
+
+    // 1. Findings array should be empty
+    expect(result.findings).toBeDefined();
+    expect(result.findings).toHaveLength(0);
+
+    // 2. Errored tools must record the failure explicitly
+    expect(result.erroredTools).toHaveLength(1);
+    expect(result.erroredTools[0]).toMatchObject({
+      toolName: mockTool.name,
+      serverName: 'test-server',
+      stage: 'drift-detection',
+    });
+    expect(result.erroredTools[0].error).toContain('Embedding API rate limit or outage');
   });
 });

@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { createLogger } from '../utils/logger.js';
@@ -40,14 +40,18 @@ Respond ONLY with JSON matching this exact shape, nothing else, no markdown fenc
 {"suspicious": boolean, "confidence": number (0-1), "reasoning": string (max ~2 sentences), "suspectedCategory": "prompt-injection" | "excessive-permissions" | "schema-mismatch" | "none"}`;
 
 export class SemanticCheckAnalyzer {
-  private client: GoogleGenerativeAI;
+  private client: GoogleGenAI;
   private modelName = 'gemini-2.5-flash';
 
   constructor(config: OdezzyConfig) {
-    if (!config.geminiApiKey) {
-      throw new Error('SemanticCheckAnalyzer requires geminiApiKey in config — none was provided.');
+    if (!config.gcpProjectId) {
+      throw new Error('SemanticCheckAnalyzer requires gcpProjectId in config (Vertex AI + ADC) — none was provided.');
     }
-    this.client = new GoogleGenerativeAI(config.geminiApiKey);
+    this.client = new GoogleGenAI({
+      vertexai: true,
+      project: config.gcpProjectId,
+      location: config.gcpLocation,
+    });
   }
 
   /**
@@ -117,12 +121,6 @@ export class SemanticCheckAnalyzer {
   }
 
   private async getVerdict(tool: MCPToolSchema): Promise<SemanticVerdict | null> {
-    const model = this.client.getGenerativeModel({
-      model: this.modelName,
-      systemInstruction: SYSTEM_INSTRUCTION,
-      generationConfig: { responseMimeType: 'application/json' },
-    });
-
     const prompt = [
       `Tool name: ${tool.name}`,
       `Description: ${tool.description ?? '(none provided)'}`,
@@ -130,8 +128,21 @@ export class SemanticCheckAnalyzer {
     ].join('\n');
 
     try {
-      const result = await model.generateContent(prompt);
-      const raw = result.response.text();
+      const result = await this.client.models.generateContent({
+        model: this.modelName,
+        contents: prompt,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+          responseMimeType: 'application/json',
+        },
+      });
+      const raw = result.text;
+
+      if (!raw) {
+        logger.warn(`Empty response from Gemini for tool "${tool.name}"`);
+        return null;
+      }
+
       const parsed = SemanticVerdictSchema.safeParse(JSON.parse(raw));
 
       if (!parsed.success) {

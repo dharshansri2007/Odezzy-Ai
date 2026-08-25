@@ -1,42 +1,43 @@
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
+import { QuarantineRegistry } from './quarantine-registry.js';
+import { AttestationLedger } from '../attestation/attestation-ledger.js';
 import type { FixProposal } from './fix-proposer.js';
+import type { VulnerabilityFinding } from '../types/index.js';
 
 const logger = createLogger('apply-fix');
+const registry = new QuarantineRegistry();
+const ledger = new AttestationLedger();
 
 export interface FixResult {
   applied: boolean;
-  backupPath?: string;
+  detail?: string;
   error?: string;
 }
 
 export class ApplyFix {
-  public async apply(proposal: FixProposal, filePath: string): Promise<FixResult> {
+  /** Called only after TrueForge ApprovalGate returns { approved: true }. */
+  public async apply(proposal: FixProposal, finding: VulnerabilityFinding): Promise<FixResult> {
     if (!proposal.autoFixable) {
-      return { applied: false, error: 'Fix is not auto-fixable' };
+      return { applied: false, error: 'Finding is not eligible for automated quarantine' };
     }
 
     try {
-      const backupPath = `${filePath}.backup-${randomUUID()}`;
-      await fs.copyFile(filePath, backupPath);
-      logger.info(`Created backup at ${backupPath}`);
-
-      let content = await fs.readFile(filePath, 'utf-8');
-
-      if (proposal.diffPreview) {
-        logger.info(`Applying diff for finding ${proposal.findingId}`);
-        content += `\n// Automated fix applied for ${proposal.findingId}\n`;
-        await fs.writeFile(filePath, content, 'utf-8');
-      }
-
-      return { applied: true, backupPath };
+      logger.info(`Executing approved remediation for ${finding.id}`);
+      
+      // 1. Add to the hard quarantine list
+      await registry.quarantine(finding.toolName, finding.serverName, finding.title, finding.id);
+      
+      // 2. Revoke cryptographic attestation immediately
+      await ledger.revoke(finding.toolName, finding.serverName, `Quarantined via approved remediation: ${finding.title}`);
+      
+      return { 
+        applied: true, 
+        detail: `"${finding.toolName}" quarantined. Cryptographic trust revoked. It will be excluded from trusted results on all future scans.` 
+      };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      logger.error(`Failed to apply fix: ${errorMsg}`);
+      logger.error(`Failed to apply quarantine: ${errorMsg}`);
       return { applied: false, error: errorMsg };
     }
   }
 }
-

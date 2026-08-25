@@ -150,8 +150,8 @@ async function runAnalysisPipeline(inventory: DiscoveryResult, config: OdezzyCon
   allFindings.push(...schemaFindings);
 
   // 3. Semantic Check Analyzer
-  if (config.geminiApiKey) {
-    spinner.text = 'Running Semantic Check Analyzer (Gemini)...';
+  if (config.gcpProjectId) {
+    spinner.text = 'Running Semantic Check Analyzer (Vertex AI)...';
     const semanticAnalyzer = new SemanticCheckAnalyzer(config);
     const toolsToAnalyze = [];
     for (const server of inventory.servers) {
@@ -163,14 +163,14 @@ async function runAnalysisPipeline(inventory: DiscoveryResult, config: OdezzyCon
     allFindings.push(...semanticResult.findings);
     allErroredTools.push(...semanticResult.erroredTools);
   } else {
-    spinner.info('Skipping Semantic Check Analyzer (GEMINI_API_KEY not set).');
+    spinner.info('Skipping Semantic Check Analyzer (GCP_PROJECT_ID not set).');
     skippedStages.push('semantic-check');
     spinner.start('Resuming analysis...');
   }
 
   // 4. Drift Detector
-  if (config.geminiApiKey && !skipDrift) {
-    spinner.text = 'Running Drift Detector (Gemini)...';
+  if (config.gcpProjectId && !skipDrift) {
+    spinner.text = 'Running Drift Detector (Vertex AI)...';
     const driftDetector = new DriftDetector(config);
     const driftTargets = [];
     for (const server of inventory.servers) {
@@ -186,7 +186,7 @@ async function runAnalysisPipeline(inventory: DiscoveryResult, config: OdezzyCon
     skippedStages.push('drift-detection');
     spinner.start('Resuming analysis...');
   } else {
-    spinner.info('Skipping Drift Detector (GEMINI_API_KEY not set).');
+    spinner.info('Skipping Drift Detector (GCP_PROJECT_ID not set).');
     skippedStages.push('drift-detection');
     spinner.start('Resuming analysis...');
   }

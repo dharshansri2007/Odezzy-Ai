@@ -47,7 +47,7 @@ export class RootAgent {
     this.remediationMcpServerName = opts.remediationMcpServerName;
   }
 
-  public async runFullScan(): Promise<{ findings: VulnerabilityFinding[]; sessionId: string }> {
+  public async runFullScan(): Promise<{ findings: VulnerabilityFinding[]; sessionId: string; erroredTools: any[] }> {
     const runId = randomUUID();
     logger.info(`Starting TrueForge-backed scan, run ${runId}`);
 
@@ -152,6 +152,6 @@ export class RootAgent {
     );
 
     logger.info(`Scan complete. ${allFindings.length} finding(s), TrueForge session ${sessionId}`);
-    return { findings: allFindings, sessionId };
+    return { findings: allFindings, sessionId, erroredTools: allErroredTools };
   }
 }

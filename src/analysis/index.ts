@@ -26,8 +26,8 @@ export class AnalysisOrchestrator {
     this.config = config;
     this.staticEngine = new StaticRuleEngine();
     this.schemaDiff = new SchemaDiffAnalyzer();
-    this.semanticCheck = config.geminiApiKey ? new SemanticCheckAnalyzer(config) : null;
-    this.driftDetector = config.geminiApiKey ? new DriftDetector(config) : null;
+    this.semanticCheck = config.gcpProjectId ? new SemanticCheckAnalyzer(config) : null;
+    this.driftDetector = config.gcpProjectId ? new DriftDetector(config) : null;
   }
 
   public async runAnalysis(discovery: DiscoveryResult): Promise<AnalysisPipelineResult> {
@@ -59,7 +59,7 @@ export class AnalysisOrchestrator {
       allFindings.push(...semanticResult.findings);
       allErroredTools.push(...semanticResult.erroredTools);
     } else {
-      logger.info('Skipping semantic checks (no geminiApiKey configured)');
+      logger.info('Skipping semantic checks (no gcpProjectId configured — Vertex AI requires a project)');
       skippedStages.push('semantic-check');
     }
 
@@ -76,7 +76,7 @@ export class AnalysisOrchestrator {
       allFindings.push(...driftResult.findings);
       allErroredTools.push(...driftResult.erroredTools);
     } else {
-      logger.info('Skipping drift detection (no geminiApiKey configured)');
+      logger.info('Skipping drift detection (no gcpProjectId configured — Vertex AI requires a project)');
       skippedStages.push('drift-detection');
     }
 
