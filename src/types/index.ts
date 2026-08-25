@@ -53,7 +53,8 @@ export const VulnerabilityFindingSchema = z.object({
     'insecure-transport',
     'schema-mismatch',
     'semantic-drift',
-    'shadow-server'
+    'shadow-server',
+    'quarantined'
   ]),
   title: z.string(),
   description: z.string(),
@@ -181,8 +182,8 @@ export const OdezzyConfigSchema = z.object({
   trueforgeUrl: z.string().optional(),
   /** Bearer token for the TrueForge server, if auth is enabled. Not required in local single-user mode. */
   trueforgeApiKey: z.string().optional(),
-  /** Model FQN passed to TrueForge, e.g. "google/gemini-2.5-flash" (provider/model). */
-  trueforgeModel: z.string().default('google/gemini-2.5-flash'),
+  /** Model FQN passed to TrueForge,  (provider/model). */
+  trueforgeModel: z.string().default('grok/grok-4-1-fast'),
   scanOptions: z.object({
     maxConcurrency: z.number().default(3),
     timeoutMs: z.number().default(30000),
