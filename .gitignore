@@ -43,3 +43,9 @@ out/
 
 # Odezzy
 .odezzy/
+
+# Ignore GCP Service Account Keys
+gcp-key.json
+*key*.json
+*credentials*.json
+.secret/

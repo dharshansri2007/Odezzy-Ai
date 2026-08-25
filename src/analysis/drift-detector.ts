@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 import { createHash } from 'node:crypto';
 import { createLogger } from '../utils/logger.js';
 import { EmbeddingBaselineStore } from '../persistence/embedding-baseline-store.js';
@@ -13,15 +13,19 @@ const DRIFT_WARNING_THRESHOLD = 0.25;
 const MIN_TEXT_CHANGE_CHARS = 15;
 
 export class DriftDetector {
-  private client: GoogleGenerativeAI;
+  private client: GoogleGenAI;
   private store = new EmbeddingBaselineStore();
   private ledger = new AttestationLedger();
 
   constructor(config: OdezzyConfig) {
-    if (!config.geminiApiKey) {
-      throw new Error('DriftDetector requires geminiApiKey — none was provided.');
+    if (!config.gcpProjectId) {
+      throw new Error('DriftDetector requires gcpProjectId (Vertex AI + ADC) — none was provided.');
     }
-    this.client = new GoogleGenerativeAI(config.geminiApiKey);
+    this.client = new GoogleGenAI({
+      vertexai: true,
+      project: config.gcpProjectId,
+      location: config.gcpLocation,
+    });
   }
 
   public async checkDrift(tool: MCPToolSchema, serverName: string): Promise<VulnerabilityFinding[]> {
@@ -108,9 +112,15 @@ export class DriftDetector {
   }
 
   private async embed(text: string): Promise<number[]> {
-    const model = this.client.getGenerativeModel({ model: 'text-embedding-004' });
-    const result = await model.embedContent(text || '(empty description)');
-    return result.embedding.values;
+    const result = await this.client.models.embedContent({
+      model: 'text-embedding-004',
+      contents: text || '(empty description)',
+    });
+    const values = result.embeddings?.[0]?.values;
+    if (!values) {
+      throw new Error('Embedding API returned no embedding values');
+    }
+    return values;
   }
 
   private cosineDistance(a: number[], b: number[]): number {

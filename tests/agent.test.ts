@@ -4,7 +4,11 @@ import type { OdezzyConfig } from '../src/types/index.js';
 
 // Mock all dependencies
 vi.mock('../src/agent/trueforge-client.js', () => ({
-  createTrueForgeClient: vi.fn().mockReturnValue({}),
+  createTrueForgeClient: vi.fn().mockReturnValue({
+    mcpServers: {
+      list: vi.fn().mockResolvedValue({ data: [] }),
+    },
+  }),
   createOdezzyScanSession: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),
   sendOdezzyTurn: vi.fn().mockResolvedValue({ turnId: 'turn-1', responseText: null, pendingApprovals: [] }),
   narrateScanPhase: vi.fn().mockResolvedValue('turn-narration-1'),
@@ -66,10 +70,18 @@ describe('RootAgent', () => {
   });
 
   it('runs a full scan and returns findings + sessionId', async () => {
-    const agent = new RootAgent(mockConfig);
-    const result = await agent.runFullScan();
-    expect(result).toHaveProperty('findings');
-    expect(result).toHaveProperty('sessionId');
-    expect(Array.isArray(result.findings)).toBe(true);
-  });
+  const agent = new RootAgent(mockConfig);
+  const result = await agent.runFullScan();
+  expect(result).toHaveProperty('findings');
+  expect(result).toHaveProperty('sessionId');
+  expect(Array.isArray(result.findings)).toBe(true);
+});
+
+// New — this is the one that would have caught the original bug
+it('shadow server detection succeeds with a well-formed TrueForge client mock', async () => {
+  const agent = new RootAgent(mockConfig);
+  const result = await agent.runFullScan();
+  expect(result.erroredTools).toBeDefined();      // fails now if the property doesn't exist
+  expect(result.erroredTools).toHaveLength(0);
+});
 });

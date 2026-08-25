@@ -40,7 +40,8 @@ export function loadConfig(): OdezzyConfig {
   const mergedConfig = {
     ...fileConfig,
     geminiApiKey: process.env.GEMINI_API_KEY || fileConfig.geminiApiKey,
-    gcpProjectId: process.env.GCP_PROJECT_ID || fileConfig.gcpProjectId,
+    gcpProjectId: process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || fileConfig.gcpProjectId,
+    gcpLocation: process.env.GOOGLE_CLOUD_LOCATION || process.env.GCP_LOCATION || fileConfig.gcpLocation,
     trueforgeUrl: process.env.TRUEFORGE_URL || fileConfig.trueforgeUrl,
     trueforgeApiKey: process.env.TRUEFORGE_API_KEY || fileConfig.trueforgeApiKey,
     trueforgeModel: process.env.TRUEFORGE_MODEL || fileConfig.trueforgeModel,

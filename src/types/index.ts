@@ -176,6 +176,8 @@ export const OdezzyConfigSchema = z.object({
   })).default([]),
   geminiApiKey: z.string().optional(),
   gcpProjectId: z.string().optional(),
+  /** Vertex AI region, e.g. "us-central1". Only used when gcpProjectId is set (Vertex AI + ADC path). */
+  gcpLocation: z.string().default('us-central1'),
   trueforgeUrl: z.string().optional(),
   /** Bearer token for the TrueForge server, if auth is enabled. Not required in local single-user mode. */
   trueforgeApiKey: z.string().optional(),
