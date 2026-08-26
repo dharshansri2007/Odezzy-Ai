@@ -8,12 +8,15 @@ import { buildGraph } from './report/graph-builder.js';
 import { RiskCalculator } from './scoring/risk-formula.js';
 import type { DiscoveryResult, MCPServerInventory, VulnerabilityFinding, RiskScore } from './types/index.js';
 import type { ScanSession } from './persistence/session-store.js';
+import { redactConfig } from './persistence/session-store.js';
+import { ApprovalGate } from './remediation/approval-gate.js';
+import { createTrueForgeClient } from './agent/trueforge-client.js';
 
 const logger = createLogger('api-server');
 const app = express();
 const PORT = 4000;
 
-app.use(cors()); // dev-only convenience; Vite's proxy makes this mostly unnecessary but harmless
+app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] })); // Vite's dev origin only
 
 const REPORTS_DIR = '.odezzy/reports';
 const LEDGER_PATH = '.odezzy/attestation/ledger.jsonl';
@@ -31,14 +34,26 @@ async function getLatestReportPath(): Promise<string | null> {
 
 /** Loads every saved session from disk. Empty array if none exist yet — not an error state. */
 async function readAllSessions(): Promise<ScanSession[]> {
+  let files: string[];
   try {
-    const files = (await readdir(SESSIONS_DIR)).filter(f => f.endsWith('.json'));
-    return await Promise.all(
-      files.map(async (f) => JSON.parse(await readFile(join(SESSIONS_DIR, f), 'utf-8')) as ScanSession)
-    );
+    files = (await readdir(SESSIONS_DIR)).filter((f) => f.endsWith('.json'));
   } catch {
-    return [];
+    return []; // directory genuinely doesn't exist yet
   }
+
+  const results = await Promise.allSettled(
+    files.map(async (f) => JSON.parse(await readFile(join(SESSIONS_DIR, f), 'utf-8')) as ScanSession)
+  );
+
+  const sessions: ScanSession[] = [];
+  for (const [i, r] of results.entries()) {
+    if (r.status === 'fulfilled') {
+      sessions.push(r.value);
+    } else {
+      logger.warn(`Skipping unreadable session file "${files[i]}": ${r.reason}`);
+    }
+  }
+  return sessions;
 }
 
 app.get('/api/latest-scan', async (_req: Request, res: Response) => {
@@ -56,15 +71,22 @@ app.get('/api/latest-scan', async (_req: Request, res: Response) => {
 });
 
 app.get('/api/ledger', async (_req: Request, res: Response) => {
+  let raw: string;
   try {
-    const raw = await readFile(LEDGER_PATH, 'utf-8');
+    raw = await readFile(LEDGER_PATH, 'utf-8');
+  } catch {
+    return res.json([]); // genuinely no ledger file yet — real empty state
+  }
+
+  try {
     const records = raw
       .split('\n')
-      .filter(line => line.trim().length > 0)
-      .map(line => JSON.parse(line));
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
     res.json(records);
-  } catch {
-    res.json([]); // no ledger yet is a valid empty state, not an error — frontend should handle an empty array gracefully
+  } catch (err) {
+    logger.error('Ledger file exists but contains invalid JSON — possible corruption', err);
+    res.status(500).json({ error: 'Ledger file is corrupted or unreadable. Check .odezzy/attestation/ledger.jsonl directly.' });
   }
 });
 
@@ -80,7 +102,7 @@ app.get('/api/sessions', async (_req: Request, res: Response) => {
   const safe = sessions
     .map((s) => ({
       ...s,
-      configSnapshot: s.configSnapshot ? { ...s.configSnapshot, geminiApiKey: undefined } : s.configSnapshot,
+      configSnapshot: s.configSnapshot ? redactConfig(s.configSnapshot) : s.configSnapshot,
     }))
     .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
   res.json(safe);
@@ -121,6 +143,20 @@ app.get('/api/graph', async (_req: Request, res: Response) => {
   }
 });
 
-app.listen(PORT, () => {
-  logger.info(`Odezzy API server running on http://localhost:${PORT}`);
+app.post('/api/approvals/resolve', express.json(), async (req: Request, res: Response) => {
+  const { sessionId, toolCallId, threadId, findingId, approved, reason, lastTurnId } = req.body;
+  // TODO: load the real `proposal` and `finding` objects for `findingId` from the
+  // matching saved session/report before calling this — omitted here since it
+  // depends on how you want to look them up (session-store vs latest report).
+  const proposal: any = {}; 
+  const finding: any = {};
+
+  const client = createTrueForgeClient({} as any);
+  const gate = new ApprovalGate(client, sessionId, lastTurnId);
+  const result = await gate.resolveApproval({ toolCallId, threadId, approved, reason, proposal, finding });
+  res.json(result);
+});
+
+app.listen(PORT, '127.0.0.1', () => {
+  logger.info(`Odezzy API server running on http://127.0.0.1:${PORT} (loopback only)`);
 });

@@ -92,6 +92,7 @@ export type ErroredTool = z.infer<typeof ErroredToolSchema>;
 export interface AnalysisPipelineResult {
   findings: VulnerabilityFinding[];
   erroredTools: ErroredTool[];
+  activeServers: DiscoveryResult['servers'];
 }
 
 export const ScanReportSchema = z.object({

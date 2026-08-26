@@ -16,11 +16,18 @@ export interface ScanSession {
 }
 
 // 1. Added redaction helper to strip sensitive fields before disk write
-function redactConfig(config: OdezzyConfig): OdezzyConfig {
+export function redactConfig(config: OdezzyConfig): OdezzyConfig {
   if (!config) return config;
   return {
     ...config,
     geminiApiKey: config.geminiApiKey ? '[REDACTED]' : undefined,
+    trueforgeApiKey: config.trueforgeApiKey ? '[REDACTED]' : undefined,
+    servers: config.servers?.map((s) => ({
+      ...s,
+      env: s.env
+        ? Object.fromEntries(Object.keys(s.env).map((k) => [k, '[REDACTED]']))
+        : s.env,
+    })),
   };
 }
 

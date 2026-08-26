@@ -118,24 +118,26 @@ export class AnalysisOrchestrator {
     // Quarantined tools are never re-attested: their trust was already
     // and deliberately revoked, and re-running clean checks on an
     // excluded tool would produce nothing to attest against anyway.
+    const analysisWasComplete = skippedStages.length === 0;
+
     for (const server of activeServers) {
       for (const tool of server.tools) {
         const findingsForThisTool = allFindings.filter(
           (f) => f.toolName === tool.name && f.serverName === server.serverName
         );
-        // Don't attest tools that errored during analysis — we can't confirm they're clean
         const toolErrored = allErroredTools.some(
           (e) => e.toolName === tool.name && e.serverName === server.serverName
         );
-        if (!toolErrored) {
+        if (!toolErrored && analysisWasComplete) {
           await this.ledger.attest(tool, server.serverName, findingsForThisTool);
         } else {
-          logger.info(`Not attesting "${tool.name}" on "${server.serverName}" — analysis was incomplete (tool errored).`);
+          const why = toolErrored ? 'tool errored' : `analysis stages skipped: ${skippedStages.join(', ')}`;
+          logger.info(`Not attesting "${tool.name}" on "${server.serverName}" — ${why}.`);
         }
       }
     }
 
     logger.info(`Analysis pipeline complete. Total findings: ${allFindings.length}, errored tools: ${allErroredTools.length}, quarantined tools skipped: ${quarantinedKeys.size}`);
-    return { findings: allFindings, erroredTools: allErroredTools };
+    return { findings: allFindings, erroredTools: allErroredTools, activeServers };
   }
 }
