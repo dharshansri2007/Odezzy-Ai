@@ -91,11 +91,11 @@ export class RootAgent {
       );
     }
 
-    // 5. Probing
+    // 5. Probing — use the quarantine-filtered server list, not the raw inventory
     const serverConfigs = new Map<string, ServerConfig>(
       (this.config.servers as ServerConfig[]).map((s) => [s.name, s])
     );
-    const probingFindings = await runProbesForServers(inventory.servers, serverConfigs);
+    const probingFindings = await runProbesForServers(analysisFindings.activeServers, serverConfigs);
     lastTurnId = await narrateScanPhase(
       client, sessionId, 'Probing Complete',
       `Adversarial probing produced ${probingFindings.length} finding(s).`,

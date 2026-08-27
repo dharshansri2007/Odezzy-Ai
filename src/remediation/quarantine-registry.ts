@@ -15,10 +15,23 @@ interface QuarantineEntry {
 
 export class QuarantineRegistry {
   private async readAll(): Promise<QuarantineEntry[]> {
+    let raw: string;
     try {
-      return JSON.parse(await readFile(REGISTRY_PATH, 'utf-8'));
-    } catch {
-      return [];
+      raw = await readFile(REGISTRY_PATH, 'utf-8');
+    } catch (err: any) {
+      const isFileNotFound =
+        err.code === 'ENOENT' || (err instanceof Error && /ENOENT/.test(err.message));
+      if (isFileNotFound) {
+        return []; // file genuinely doesn't exist yet — real empty state, fine
+      }
+      logger.error('Failed to read quarantine registry — refusing to treat as empty', err);
+      throw new Error(`Quarantine registry unreadable: ${err.message}. Refusing to proceed with an unverifiable ban list.`);
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (err) {
+      logger.error('Quarantine registry contains invalid JSON — refusing to treat as empty', err);
+      throw new Error('Quarantine registry is corrupted. Fix or restore .odezzy/quarantine.json before scanning.');
     }
   }
 

@@ -1,4 +1,5 @@
 import { createLogger } from '../utils/logger.js';
+import { randomUUID } from 'node:crypto';
 import { 
   type DiscoveryResult, 
   type VulnerabilityFinding, 
@@ -11,6 +12,7 @@ import { SchemaDiffAnalyzer } from './schema-diff.js';
 import { SemanticCheckAnalyzer } from './semantic-check.js';
 import { DriftDetector } from './drift-detector.js';
 import { AttestationLedger } from '../attestation/attestation-ledger.js';
+import { QuarantineRegistry } from '../remediation/quarantine-registry.js';
 
 const logger = createLogger('analysis-orchestrator');
 
@@ -21,6 +23,7 @@ export class AnalysisOrchestrator {
   private semanticCheck: SemanticCheckAnalyzer | null;
   private driftDetector: DriftDetector | null;
   private ledger = new AttestationLedger();
+  private quarantine = new QuarantineRegistry();
 
   constructor(config: OdezzyConfig) {
     this.config = config;
@@ -35,14 +38,45 @@ export class AnalysisOrchestrator {
     const allFindings: VulnerabilityFinding[] = [];
     const allErroredTools: ErroredTool[] = [];
     const skippedStages: string[] = [];
+    const quarantinedKeys = new Set<string>();
 
-    // 1. Static Rules Pass
-    const staticFindings = this.staticEngine.scan(discovery.servers);
+    // 0. Quarantine check — tools a human already approved for quarantine
+    // are excluded from active re-analysis (no point re-flagging or
+    // re-spending API calls on something already banned) and get a single
+    // honest 'quarantined' finding instead, so it's still visible in the report.
+    const activeServers: DiscoveryResult['servers'] = [];
+    for (const server of discovery.servers) {
+      const activeTools = [];
+      for (const tool of server.tools) {
+        if (await this.quarantine.isQuarantined(tool.name, server.serverName)) {
+          quarantinedKeys.add(`${server.serverName}:${tool.name}`);
+          allFindings.push({
+            id: randomUUID(),
+            toolName: tool.name,
+            serverName: server.serverName,
+            severity: 'critical',
+            category: 'quarantined',
+            title: `Tool "${tool.name}" is quarantined`,
+            description: 'This tool was previously quarantined via an approved remediation and is excluded from active analysis and attestation.',
+            evidence: 'Present in .odezzy/quarantine.json',
+            remediation: 'Review the quarantine record before considering this tool trustworthy again.',
+            confidence: 1,
+          });
+          logger.warn(`Skipping active analysis for quarantined tool "${tool.name}" on "${server.serverName}"`);
+        } else {
+          activeTools.push(tool);
+        }
+      }
+      activeServers.push({ ...server, tools: activeTools });
+    }
+
+    // 1. Static Rules Pass (quarantined tools excluded)
+    const staticFindings = this.staticEngine.scan(activeServers);
     allFindings.push(...staticFindings);
 
     const semanticTargets = [];
 
-    for (const server of discovery.servers) {
+    for (const server of activeServers) {
       for (const tool of server.tools) {
         // 2. Schema Diff (Declared) Pass
         const schemaFindings = this.schemaDiff.checkDeclaredSchema(tool, server.serverName);
@@ -67,7 +101,7 @@ export class AnalysisOrchestrator {
     if (this.driftDetector) {
       logger.info('Running drift detection');
       const driftTargets = [];
-      for (const server of discovery.servers) {
+      for (const server of activeServers) {
         for (const tool of server.tools) {
           driftTargets.push({ tool, serverName: server.serverName });
         }
@@ -80,25 +114,30 @@ export class AnalysisOrchestrator {
       skippedStages.push('drift-detection');
     }
 
-    // 5. Attestation — certify tools that passed all checks
-    for (const server of discovery.servers) {
+    // 5. Attestation — certify tools that passed all checks.
+    // Quarantined tools are never re-attested: their trust was already
+    // and deliberately revoked, and re-running clean checks on an
+    // excluded tool would produce nothing to attest against anyway.
+    const analysisWasComplete = skippedStages.length === 0;
+
+    for (const server of activeServers) {
       for (const tool of server.tools) {
         const findingsForThisTool = allFindings.filter(
           (f) => f.toolName === tool.name && f.serverName === server.serverName
         );
-        // Don't attest tools that errored during analysis — we can't confirm they're clean
         const toolErrored = allErroredTools.some(
           (e) => e.toolName === tool.name && e.serverName === server.serverName
         );
-        if (!toolErrored) {
+        if (!toolErrored && analysisWasComplete) {
           await this.ledger.attest(tool, server.serverName, findingsForThisTool);
         } else {
-          logger.info(`Not attesting "${tool.name}" on "${server.serverName}" — analysis was incomplete (tool errored).`);
+          const why = toolErrored ? 'tool errored' : `analysis stages skipped: ${skippedStages.join(', ')}`;
+          logger.info(`Not attesting "${tool.name}" on "${server.serverName}" — ${why}.`);
         }
       }
     }
 
-    logger.info(`Analysis pipeline complete. Total findings: ${allFindings.length}, errored tools: ${allErroredTools.length}`);
-    return { findings: allFindings, erroredTools: allErroredTools };
+    logger.info(`Analysis pipeline complete. Total findings: ${allFindings.length}, errored tools: ${allErroredTools.length}, quarantined tools skipped: ${quarantinedKeys.size}`);
+    return { findings: allFindings, erroredTools: allErroredTools, activeServers };
   }
 }

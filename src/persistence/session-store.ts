@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createLogger } from '../utils/logger.js';
-import type { ScanReport, DiscoveryResult, VulnerabilityFinding } from '../types/index.js';
+import type { ScanReport, DiscoveryResult, VulnerabilityFinding, OdezzyConfig } from '../types/index.js';
 
 const logger = createLogger('session-store');
 
@@ -15,6 +15,22 @@ export interface ScanSession {
   report?: ScanReport;
 }
 
+// 1. Added redaction helper to strip sensitive fields before disk write
+export function redactConfig(config: OdezzyConfig): OdezzyConfig {
+  if (!config) return config;
+  return {
+    ...config,
+    geminiApiKey: config.geminiApiKey ? '[REDACTED]' : undefined,
+    trueforgeApiKey: config.trueforgeApiKey ? '[REDACTED]' : undefined,
+    servers: config.servers?.map((s) => ({
+      ...s,
+      env: s.env
+        ? Object.fromEntries(Object.keys(s.env).map((k) => [k, '[REDACTED]']))
+        : s.env,
+    })),
+  };
+}
+
 export class SessionStore {
   private readonly sessionsDir: string;
 
@@ -25,7 +41,14 @@ export class SessionStore {
   public async save(session: ScanSession): Promise<void> {
     await fs.mkdir(this.sessionsDir, { recursive: true });
     const filePath = path.join(this.sessionsDir, `${session.id}.json`);
-    await fs.writeFile(filePath, JSON.stringify(session, null, 2), 'utf-8');
+    
+    // 2. Sanitized session config snapshot before serialization
+    const sanitized = { 
+      ...session, 
+      configSnapshot: redactConfig(session.configSnapshot) 
+    };
+
+    await fs.writeFile(filePath, JSON.stringify(sanitized, null, 2), 'utf-8');
     logger.info(`Session saved to ${filePath}`);
   }
 

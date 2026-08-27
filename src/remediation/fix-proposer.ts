@@ -54,6 +54,13 @@ export class FixProposer {
           autoFixable: false,
           risk: 'moderate',
         };
+      case 'quarantined':
+        return {
+          findingId: finding.id,
+          proposedFix: 'Already quarantined and excluded from trusted results. No further action needed unless lifting the quarantine.',
+          autoFixable: false,
+          risk: 'safe',
+        };
       default:
         return {
           findingId: finding.id,
@@ -64,4 +71,3 @@ export class FixProposer {
     }
   }
 }
-

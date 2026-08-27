@@ -1,10 +1,12 @@
 import { createLogger } from '../utils/logger.js';
 import { sendOdezzyTurn, resolveOdezzyApproval } from '../agent/trueforge-client.js';
+import { ApplyFix, type FixResult } from './apply-fix.js';
 import type { TrueForge } from '@truefoundry/trueforge-sdk';
 import type { VulnerabilityFinding } from '../types/index.js';
 import type { FixProposal } from './fix-proposer.js';
 
 const logger = createLogger('approval-gate');
+const applyFix = new ApplyFix();
 
 /**
  * Replaces the previous CLI readline y/n prompt with TrueForge's real
@@ -78,16 +80,23 @@ export class ApprovalGate {
   }
 
   /**
-   * Programmatic escape hatch for a caller (e.g. a UI or test) that
+   * Programmatic escape hatch for a caller (e.g. a UI, CLI, or test) that
    * already has a human's decision and wants to resolve the pending
    * approval directly, rather than waiting on TrueForge's own chat UI.
+   *
+   * IMPORTANT: this is the only place in the codebase that actually
+   * mutates state (quarantine + attestation revocation). It must only
+   * ever be called with a decision a human genuinely made — never have
+   * code compute `approved` itself and pass it in here.
    */
   public async resolveApproval(params: {
     toolCallId: string;
     threadId: string;
     approved: boolean;
     reason?: string;
-  }): Promise<{ approved: boolean; reason?: string }> {
+    proposal: FixProposal;
+    finding: VulnerabilityFinding;
+  }): Promise<{ approved: boolean; reason?: string; fixResult?: FixResult }> {
     if (!this.lastTurnId) {
       throw new Error('resolveApproval() called before any turn was sent for this gate.');
     }
@@ -99,6 +108,19 @@ export class ApprovalGate {
       reason: params.reason,
     });
     this.lastTurnId = outcome.turnId;
-    return { approved: params.approved, reason: params.reason };
+
+    if (!params.approved) {
+      return { approved: false, reason: params.reason };
+    }
+
+    // A human approved this specific finding — now, and only now, actually apply it.
+    logger.info(`Approval confirmed for finding ${params.finding.id} — applying remediation.`);
+    const fixResult = await applyFix.apply(params.proposal, params.finding);
+
+    if (!fixResult.applied) {
+      logger.error(`Approved fix for ${params.finding.id} could not be applied: ${fixResult.error}`);
+    }
+
+    return { approved: true, reason: params.reason, fixResult };
   }
 }
