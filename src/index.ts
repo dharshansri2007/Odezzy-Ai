@@ -20,6 +20,7 @@ import { SessionStore } from './persistence/session-store.js';
 import { AttestationLedger } from './attestation/attestation-ledger.js';
 import { FixProposer } from './remediation/fix-proposer.js';
 import { ApplyFix } from './remediation/apply-fix.js';
+import { HumanApprovalToken } from './remediation/human-approval-token.js';
 import { QuarantineRegistry } from './remediation/quarantine-registry.js';
 import { randomUUID } from 'node:crypto';
 import { type VulnerabilityFinding, type OdezzyConfig, type DiscoveryResult, type ErroredTool } from './types/index.js';
@@ -119,7 +120,7 @@ async function main() {
   } else if (command === 'fullscan') {
     spinner.start('Running full TrueForge-backed scan...');
     try {
-      const agent = new RootAgent(config);
+      const agent = new RootAgent(config, { remediationMcpServerName: config.remediationMcpServerName });
       const result = await agent.runFullScan();
       spinner.succeed(`Full scan complete. ${result.findings.length} finding(s). TrueForge session: ${result.sessionId}`);
       await generateSummary(result.findings);
@@ -172,7 +173,12 @@ async function main() {
     // specific finding id, IS the approval act — the same role the old
     // readline y/n prompt played before TrueForge's async approval flow
     // was added. It is deliberately not something the agent can trigger itself.
-    const result = await new ApplyFix().apply(proposal, finding);
+    // Minting the token here is what makes this path go through the same
+    // chokepoint as approval-gate.ts's TrueForge path — apply() only
+    // accepts a real HumanApprovalToken, and this is the only factory
+    // that can produce one from a CLI confirmation.
+    const token = HumanApprovalToken.fromCliConfirmFlag(finding.id);
+    const result = await new ApplyFix().apply(proposal, finding, token);
     if (result.applied) {
       console.log(chalk.green(`✔ ${result.detail}`));
     } else {
@@ -207,7 +213,7 @@ async function runAnalysisPipeline(inventory: DiscoveryResult, config: OdezzyCon
           category: 'quarantined',
           title: `Tool "${tool.name}" is quarantined`,
           description: 'This tool was previously quarantined via an approved remediation and is excluded from active analysis and attestation.',
-          evidence: 'Present in .odezzy/quarantine.json',
+          evidence: 'Present in .odezzy/quarantine.jsonl (hash-chained approval record)',
           remediation: 'Review the quarantine record before considering this tool trustworthy again.',
           confidence: 1,
         });
@@ -290,6 +296,18 @@ async function runAnalysisPipeline(inventory: DiscoveryResult, config: OdezzyCon
       const toolErrored = allErroredTools.some(
         (e) => e.toolName === tool.name && e.serverName === server.serverName
       );
+      // Re-check quarantine status right here, immediately before
+      // attesting — same TOCTOU fix as AnalysisOrchestrator.runAnalysis()
+      // in analysis/index.ts. This pipeline is a separate copy of the
+      // analysis loop (see the comment above), so it needed the same fix
+      // applied independently — fixing one without the other would have
+      // left this "scan" command's older code path silently vulnerable
+      // to the exact race the fix in analysis/index.ts closes.
+      const quarantinedNow = await quarantine.isQuarantined(tool.name, server.serverName);
+      if (quarantinedNow) {
+        spinner.text = `Skipping attestation for "${tool.name}" — quarantined during this scan.`;
+        continue;
+      }
       if (!toolErrored) {
         await ledger.attest(tool, server.serverName, findingsForThisTool);
       }

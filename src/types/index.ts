@@ -180,6 +180,8 @@ export const OdezzyConfigSchema = z.object({
   gcpProjectId: z.string().optional(),
   /** Vertex AI region, e.g. "us-central1". Only used when gcpProjectId is set (Vertex AI + ADC path). */
   gcpLocation: z.string().default('us-central1'),
+  /** Name of the TrueForge MCP connector exposing apply_fix, registered under Settings → Connectors. Required for the fullscan approval loop to ever actually pause for a human — see agent/root-agent.ts. */
+  remediationMcpServerName: z.string().optional(),
   trueforgeUrl: z.string().optional(),
   /** Bearer token for the TrueForge server, if auth is enabled. Not required in local single-user mode. */
   trueforgeApiKey: z.string().optional(),
@@ -249,3 +251,24 @@ export const AttestationRecordSchema = z.object({
   revokedReason: z.string().optional(),
 });
 export type AttestationRecord = z.infer<typeof AttestationRecordSchema>;
+
+/**
+ * QuarantineRecord — a tamper-evident, hash-chained entry recording that a
+ * specific human, via a specific approval source, at a specific time,
+ * authorized quarantining a tool. Mirrors AttestationRecord's chain
+ * pattern (see HashChainedLog in utils/hash-chained-log.ts) so that
+ * "this tool is quarantined" and "a human genuinely authorized this" are
+ * both independently provable, not just the former.
+ */
+export const QuarantineRecordSchema = z.object({
+  toolName: z.string(),
+  serverName: z.string(),
+  findingId: z.string(),
+  reason: z.string(),
+  action: z.literal('quarantine'),
+  tokenSource: z.enum(['trueforge-ui', 'cli-confirm', 'trueforge-gated-tool-call']),
+  grantedAt: z.string(),
+  recordedAt: z.string(),
+  previousHash: z.string(),
+});
+export type QuarantineRecord = z.infer<typeof QuarantineRecordSchema>;

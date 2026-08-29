@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { VulnerabilityFinding, OdezzyConfig, DiscoveryResult } from '../src/types/index.js';
 import type { FixProposal } from '../src/remediation/fix-proposer.js';
+import { HumanApprovalToken } from '../src/remediation/human-approval-token.js';
 
 // ---------------------------------------------------------------------------
 // 1. QuarantineRegistry — in-memory fake filesystem so this actually proves
@@ -38,7 +39,8 @@ describe('QuarantineRegistry', () => {
   it('persists a quarantine entry and reports it on future checks', async () => {
     const { QuarantineRegistry } = await import('../src/remediation/quarantine-registry.js');
     const registry = new QuarantineRegistry();
-    await registry.quarantine('read_notes', 'canary-server', 'prompt injection', 'finding-1');
+    const token = HumanApprovalToken.fromCliConfirmFlag('finding-1');
+    await registry.quarantine('read_notes', 'canary-server', 'prompt injection', 'finding-1', token);
 
     expect(await registry.isQuarantined('read_notes', 'canary-server')).toBe(true);
     // a different tool on the same server is unaffected
@@ -48,11 +50,45 @@ describe('QuarantineRegistry', () => {
   it('does not duplicate an entry if quarantined twice', async () => {
     const { QuarantineRegistry } = await import('../src/remediation/quarantine-registry.js');
     const registry = new QuarantineRegistry();
-    await registry.quarantine('read_notes', 'canary-server', 'reason A', 'finding-1');
-    await registry.quarantine('read_notes', 'canary-server', 'reason B', 'finding-2');
+    const tokenA = HumanApprovalToken.fromCliConfirmFlag('finding-1');
+    const tokenB = HumanApprovalToken.fromCliConfirmFlag('finding-2');
+    await registry.quarantine('read_notes', 'canary-server', 'reason A', 'finding-1', tokenA);
+    await registry.quarantine('read_notes', 'canary-server', 'reason B', 'finding-2', tokenB);
 
-    const raw = JSON.parse(fakeDisk['.odezzy/quarantine.json']);
-    expect(raw).toHaveLength(1);
+    const lines = fakeDisk['.odezzy/quarantine.jsonl'].split('\n').filter((l) => l.trim().length > 0);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('rejects a token minted for a different finding than the one being quarantined', async () => {
+    const { QuarantineRegistry } = await import('../src/remediation/quarantine-registry.js');
+    const registry = new QuarantineRegistry();
+    const tokenForWrongFinding = HumanApprovalToken.fromCliConfirmFlag('finding-999');
+
+    await expect(
+      registry.quarantine('read_notes', 'canary-server', 'reason', 'finding-1', tokenForWrongFinding)
+    ).rejects.toThrow(/finding-999/);
+    expect(await registry.isQuarantined('read_notes', 'canary-server')).toBe(false);
+  });
+
+  it('hash-chains entries and verifyChainIntegrity detects tampering', async () => {
+    const { QuarantineRegistry } = await import('../src/remediation/quarantine-registry.js');
+    const registry = new QuarantineRegistry();
+    await registry.quarantine('tool_a', 'server-1', 'reason A', 'finding-1', HumanApprovalToken.fromCliConfirmFlag('finding-1'));
+    await registry.quarantine('tool_b', 'server-1', 'reason B', 'finding-2', HumanApprovalToken.fromCliConfirmFlag('finding-2'));
+
+    const clean = await registry.verifyChainIntegrity();
+    expect(clean.valid).toBe(true);
+
+    // Tamper with the first line's reason without updating the chain.
+    const lines = fakeDisk['.odezzy/quarantine.jsonl'].split('\n').filter((l) => l.trim().length > 0);
+    const tampered = JSON.parse(lines[0]);
+    tampered.reason = 'tampered reason';
+    lines[0] = JSON.stringify(tampered);
+    fakeDisk['.odezzy/quarantine.jsonl'] = lines.join('\n') + '\n';
+
+    const afterTamper = await registry.verifyChainIntegrity();
+    expect(afterTamper.valid).toBe(false);
+    expect(afterTamper.brokenAtIndex).toBe(1); // the second record's previousHash no longer matches the (edited) first
   });
 });
 
@@ -165,7 +201,12 @@ describe('ApprovalGate.resolveApproval applies fixes on approval', () => {
       finding: mockFinding,
     });
 
-    expect(applyMock).toHaveBeenCalledWith(mockProposal, mockFinding);
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    const [calledProposal, calledFinding, calledToken] = applyMock.mock.calls[0];
+    expect(calledProposal).toEqual(mockProposal);
+    expect(calledFinding).toEqual(mockFinding);
+    expect(calledToken.findingId).toBe(mockFinding.id);
+    expect(calledToken.source).toBe('trueforge-ui');
     expect(result.approved).toBe(true);
     expect(result.fixResult?.applied).toBe(true);
   });

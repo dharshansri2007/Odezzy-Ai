@@ -1,0 +1,11 @@
+#!/bin/sh
+# Odezzy AI pre-commit hook — catches "import references a method/export
+# that doesn't exist" bugs (like the missing HumanApprovalToken factory)
+# before they reach a PR, not after a reviewer or CI catches them.
+#
+# Enable once per clone with:
+#   git config core.hooksPath .githooks
+set -e
+echo "[pre-commit] Running tsc --noEmit..."
+npm run --silent typecheck
+echo "[pre-commit] Type check passed."

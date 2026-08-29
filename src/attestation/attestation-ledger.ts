@@ -1,7 +1,8 @@
 import { generateKeyPairSync, sign, verify, createHash, type KeyObject } from 'node:crypto';
-import { readFile, writeFile, mkdir, appendFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
+import { HashChainedLog } from '../utils/hash-chained-log.js';
 import type { MCPToolSchema, VulnerabilityFinding, AttestationRecord } from '../types/index.js';
 
 const logger = createLogger('attestation-ledger');
@@ -22,9 +23,15 @@ interface StoredKeys {
  * This is deliberately self-signed and locally verifiable — not anchored
  * to an external CA or Sigstore/OIDC. The research this follows treats
  * external anchoring as a separate concern; this proves the concept.
+ *
+ * The append-only hash-chaining itself (readAll/latestChainHash/append)
+ * is delegated to the shared HashChainedLog primitive in
+ * utils/hash-chained-log.ts — this class only adds the Ed25519
+ * signing/verification layer on top.
  */
 export class AttestationLedger {
   private keysCache: StoredKeys | null = null;
+  private readonly log = new HashChainedLog<AttestationRecord>(LOG_PATH, (r) => r.previousRecordHash);
 
   private async ensureDir(): Promise<void> {
     await mkdir(LEDGER_DIR, { recursive: true });
@@ -59,36 +66,10 @@ export class AttestationLedger {
     });
   }
 
-  private async readAllRecords(): Promise<AttestationRecord[]> {
-    try {
-      const raw = await readFile(LOG_PATH, 'utf-8');
-      return raw
-        .split('\n')
-        .filter((line) => line.trim().length > 0)
-        .map((line) => JSON.parse(line));
-    } catch {
-      return [];
-    }
-  }
-
-  private async getLatestChainHash(): Promise<string> {
-    const records = await this.readAllRecords();
-    if (records.length === 0) {
-      return createHash('sha256').update('genesis').digest('hex');
-    }
-    const last = records[records.length - 1];
-    return createHash('sha256').update(JSON.stringify(last)).digest('hex');
-  }
-
   public async getLatest(toolName: string, serverName: string): Promise<AttestationRecord | null> {
-    const records = await this.readAllRecords();
+    const records = await this.log.readAll();
     const matches = records.filter((r) => r.toolName === toolName && r.serverName === serverName);
     return matches.length > 0 ? matches[matches.length - 1] : null;
-  }
-
-  private async append(record: AttestationRecord): Promise<void> {
-    await this.ensureDir();
-    await appendFile(LOG_PATH, JSON.stringify(record) + '\n', 'utf-8');
   }
 
   /**
@@ -108,7 +89,7 @@ export class AttestationLedger {
     const { privateKeyPem } = await this.getOrCreateKeys();
     const definitionHash = createHash('sha256').update(this.canonicalToolDefinition(tool)).digest('hex');
     const timestamp = new Date().toISOString();
-    const previousRecordHash = await this.getLatestChainHash();
+    const previousRecordHash = await this.log.latestChainHash();
 
     const payload = `${tool.name}|${serverName}|${definitionHash}|${timestamp}|${previousRecordHash}`;
     const signature = sign(null, Buffer.from(payload), {
@@ -127,7 +108,7 @@ export class AttestationLedger {
       status: 'attested',
     };
 
-    await this.append(record);
+    await this.log.append(record);
     logger.info(`Attested "${tool.name}" on "${serverName}" — signature ${signature.slice(0, 16)}...`);
     return record;
   }
@@ -149,7 +130,7 @@ export class AttestationLedger {
       revokedReason: reason,
     };
 
-    await this.append(revokedRecord);
+    await this.log.append(revokedRecord);
     logger.warn(`Revoked attestation for "${toolName}" on "${serverName}": ${reason}`);
     return revokedRecord;
   }
@@ -175,7 +156,7 @@ export class AttestationLedger {
 
   /** Returns the full ledger for the governance report. */
   public async getFullLedger(): Promise<AttestationRecord[]> {
-    return this.readAllRecords();
+    return this.log.readAll();
   }
 
   /** Exposes the public key PEM for independent verification. */

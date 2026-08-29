@@ -58,7 +58,7 @@ export class AnalysisOrchestrator {
             category: 'quarantined',
             title: `Tool "${tool.name}" is quarantined`,
             description: 'This tool was previously quarantined via an approved remediation and is excluded from active analysis and attestation.',
-            evidence: 'Present in .odezzy/quarantine.json',
+            evidence: 'Present in .odezzy/quarantine.jsonl (hash-chained approval record)',
             remediation: 'Review the quarantine record before considering this tool trustworthy again.',
             confidence: 1,
           });
@@ -128,6 +128,20 @@ export class AnalysisOrchestrator {
         const toolErrored = allErroredTools.some(
           (e) => e.toolName === tool.name && e.serverName === server.serverName
         );
+        // Re-check quarantine status right here, immediately before
+        // attesting — not just once at the top of the pipeline. A tool
+        // could have been quarantined mid-scan (e.g. a human running
+        // `quarantine <session> <finding> --confirm` in another terminal
+        // while this scan is still analyzing other tools). The check at
+        // the top of runAnalysis() only protects tools that were already
+        // quarantined when the scan STARTED; without this second check,
+        // a tool quarantined during the scan would still get attested by
+        // the in-flight run, directly contradicting the quarantine.
+        const quarantinedNow = await this.quarantine.isQuarantined(tool.name, server.serverName);
+        if (quarantinedNow) {
+          logger.warn(`Not attesting "${tool.name}" on "${server.serverName}" — quarantined during this scan (TOCTOU check).`);
+          continue;
+        }
         if (!toolErrored && analysisWasComplete) {
           await this.ledger.attest(tool, server.serverName, findingsForThisTool);
         } else {

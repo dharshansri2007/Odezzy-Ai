@@ -13,6 +13,20 @@ export interface ScanSession {
   discoveryResult?: DiscoveryResult;
   findings: VulnerabilityFinding[];
   report?: ScanReport;
+  /**
+   * Per-run summary of what the approval gate actually did, distinguishing
+   * genuinely-reviewed-and-denied from plumbing-never-resolved (see
+   * ApprovalGate.requestApproval's gateStatus and the bug this closes:
+   * "N findings, all failed closed" used to look identical either way).
+   */
+  approvalGateSummary?: {
+    totalRequests: number;
+    approved: number;
+    deniedReviewed: number;
+    noRequest: number;
+    plumbingUnresolved: number;
+    pending: number;
+  };
 }
 
 // 1. Added redaction helper to strip sensitive fields before disk write

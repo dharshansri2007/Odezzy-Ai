@@ -1,0 +1,58 @@
+name: CI
+
+# Build-blocking checks — this is what pr_agent.toml's AI reviewer does
+# NOT do. That reviewer is advisory: it can leave comments, but nothing
+# stops a PR from merging if it's wrong or gets ignored. This workflow is
+# the actual gate. It would have caught the missing
+# HumanApprovalToken.fromTrueForgeGatedToolCall() factory automatically,
+# the first time, on every PR — instead of a human having to notice the
+# import was broken during manual review.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test -- --run
+
+  # Optional stretch goal from the review: enforce "no caller can fake
+  # approval" with tooling, not just the type system plus vigilance.
+  # Any file that calls ApplyFix.apply() must also import
+  # HumanApprovalToken — a grep-based check, not a full AST lint, but
+  # enough to catch the obvious version of "someone bypassed the token
+  # system" without adding an ESLint custom-rule dependency for one check.
+  enforce-approval-token-import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every caller of ApplyFix.apply() must import HumanApprovalToken
+        run: |
+          set -e
+          FAILED=0
+          for f in $(grep -rl "\.apply(" src remediation-server 2>/dev/null | grep -v "apply-fix\.ts$"); do
+            if grep -q "new ApplyFix" "$f" || grep -q "ApplyFix()\.apply\|applyFix\.apply" "$f"; then
+              if ! grep -q "HumanApprovalToken" "$f"; then
+                echo "::error file=$f::Calls ApplyFix.apply() without importing HumanApprovalToken"
+                FAILED=1
+              fi
+            fi
+          done
+          exit $FAILED
