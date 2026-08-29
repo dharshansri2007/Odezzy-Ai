@@ -125,11 +125,39 @@ export class RootAgent {
     // 7. Remediation
     const proposals = new FixProposer().proposeFixes(allFindings);
     const gate = new ApprovalGate(client, sessionId);
+    let plumbingUnresolvedCount = 0;
+    const gateSummary = { totalRequests: 0, approved: 0, deniedReviewed: 0, noRequest: 0, plumbingUnresolved: 0, pending: 0 };
     for (const proposal of proposals) {
       const finding = allFindings.find((f) => f.id === proposal.findingId);
       if (!finding) continue;
       const decision = await gate.requestApproval(proposal, finding);
       logger.info(`Approval decision for ${finding.id}: ${decision.approved ? 'approved' : decision.reason}`);
+      gateSummary.totalRequests++;
+      if (decision.gateStatus === 'plumbing-unresolved') {
+        plumbingUnresolvedCount++;
+        gateSummary.plumbingUnresolved++;
+      } else if (decision.gateStatus === 'no-request') {
+        gateSummary.noRequest++;
+      } else if (decision.gateStatus === 'pending') {
+        gateSummary.pending++;
+      } else if (decision.approved) {
+        gateSummary.approved++;
+      } else {
+        gateSummary.deniedReviewed++;
+      }
+    }
+    if (plumbingUnresolvedCount > 0) {
+      // This is the exact ambiguity the last review flagged: without this
+      // line, "N findings, all failed closed" reads identically whether
+      // TrueForge genuinely reviewed and rejected everything, or the
+      // approval gate was unreachable the whole run. Make it impossible
+      // to miss which one actually happened.
+      logger.warn(
+        `⚠️  ${plumbingUnresolvedCount}/${proposals.length} approval request(s) this run did NOT reach a ` +
+          `resolved state (TrueForge turn stayed non-"done") — these were failed closed as unresolved, ` +
+          `NOT reviewed and denied. Check that a remediation-tools MCP connector with ` +
+          `requireApprovalForTools is registered in TrueForge before trusting this run's approval outcomes.`
+      );
     }
 
     // 8. Report + persistence
@@ -141,6 +169,7 @@ export class RootAgent {
       configSnapshot: this.config,
       discoveryResult: inventory,
       findings: allFindings,
+      approvalGateSummary: gateSummary,
     });
 
     // 9. Final narration

@@ -184,6 +184,59 @@ npx vitest run --coverage
 | `agent.test.ts` | 2 | RootAgent lifecycle |
 | `config.test.ts` | 6 | Config parsing + defaults |
 | `attestation.test.ts` | 7 | Attestation ledger (attest, verify, revoke, chain) |
+| `quarantine.test.ts` | 8 | Quarantine hash-chain, TOCTOU-safe attestation, approval-gated apply |
+| `human-approval-token.test.ts` | 6 | Token factories + cross-finding rejection |
+| `remediation-server.test.ts` | 4 | Real MCP subprocess for `apply_fix` |
+| `server-approvals.test.ts` | 5 | HTTP API approval endpoints |
+
+---
+
+## 🚦 Build Health — what's actually enforced
+
+Being specific about this on purpose: it's easy for "security review" in a
+project like this to quietly mean "an AI left some comments," which is not
+the same thing as "a bug like this cannot merge." Here's exactly which is
+which.
+
+**Enforced automatically, blocks the PR (`.github/workflows/ci.yml`):**
+- `npm run typecheck` (`tsc --noEmit`) — this is what would have caught
+  the bug where `tests/remediation-server/server.ts` called a
+  `HumanApprovalToken` factory that didn't exist in the real
+  implementation yet, automatically, the first time, instead of a human
+  having to notice it during review. (Part of why that bug slipped
+  through originally: the file lived outside `tsconfig.json`'s `include`
+  path, so `tsc` was never even looking at it. It's since been moved to
+  `remediation-server/` at the repo root, matching `tsconfig.json`,
+  `package.json`'s `remediation-server` script, and the file's own setup
+  instructions — see its header comment.)
+- `npm test` (the full Vitest suite above) — also build-blocking.
+- A grep-based check that any file calling `ApplyFix.apply()` also
+  imports `HumanApprovalToken` — a lightweight, non-AST enforcement of
+  "no caller can fake approval" as a CI gate, not just a type-system
+  property a reviewer has to remember to check for.
+
+**Also available, opt-in, not yet enforced by CI:**
+- `.githooks/pre-commit` runs the same typecheck locally before a commit
+  even happens. Enable it once per clone with
+  `git config core.hooksPath .githooks`. This is a convenience layer in
+  front of CI, not a replacement for it — CI is what actually blocks a
+  PR; the hook just gives faster local feedback.
+
+**Advisory only, does NOT block anything (`pr_agent.toml`):**
+- `pr_reviewer` / `pr_code_suggestions` — an AI reviewer that leaves PR
+  comments focused on security-critical paths, MCP tool schemas, type
+  safety, and error handling. Useful for catching things a compiler
+  can't (logic questions, missing edge cases, design concerns), but it
+  cannot fail a build and a PR can merge with its comments unaddressed.
+
+**Manual, human judgment only:**
+- Whether a proposed remediation is actually safe to approve — that's
+  the entire point of TrueForge's approval-gating (see below); no amount
+  of CI replaces a human looking at a specific finding before it's
+  quarantined.
+- Cryptographic key custody for the attestation ledger's Ed25519 keypair
+  (`.odezzy/attestation/keys.json`) — nothing automated rotates or
+  protects this file today.
 
 ---
 
@@ -239,8 +292,8 @@ odezzy-ai/
 │   ├── server.ts                 #    4 tools, 3 seeded vulnerabilities
 │   ├── config.json               #    Fake leaked API key
 │   └── package.json
-├── .env                          # 🔐 Environment variables
-├── .env.example                  # 📋 Template
+├── .env (create your own)        # 🔐 Environment variables
+
 ├── odezzy.config.json            # ⚙️  Scan target configuration
 ├── package.json                  # 📦 Project config (v0.5.0)
 ├── tsconfig.json                 # 🔧 Strict TypeScript

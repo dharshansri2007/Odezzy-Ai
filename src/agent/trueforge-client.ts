@@ -44,9 +44,22 @@ const logger = createLogger('trueforge-client');
 
 export interface OdezzyTurnOutcome {
   turnId: string;
+  /**
+   * 'done' means the turn actually reached a terminal state and
+   * `pendingApprovals` is trustworthy — an empty array genuinely means
+   * "nothing pending," not "we didn't check." 'unresolved' means the
+   * turn came back in some other state (e.g. "running") and
+   * `pendingApprovals` is always `[]` here regardless of what's
+   * actually happening server-side — callers MUST treat this
+   * distinctly from a genuine no-pending-approvals result. This field
+   * exists specifically to close that ambiguity: before it existed, a
+   * caller had no way to tell "TrueForge reviewed this and there was
+   * nothing to approve" apart from "we have no idea what TrueForge did."
+   */
+  status: 'done' | 'unresolved';
   /** Final assistant text, or null if the turn paused without a final message. */
   responseText: string | null;
-  /** Non-empty when the turn stopped waiting on a tool-call approval decision. */
+  /** Non-empty when the turn stopped waiting on a tool-call approval decision. Only trustworthy when status === 'done'. */
   pendingApprovals: { toolCallId: string; sourceEventId: string; threadId: string }[];
 }
 
@@ -124,11 +137,16 @@ export async function sendOdezzyTurn(
   if (turn.state.status !== 'done') {
     // Non-streaming createTurn still executes synchronously to a
     // terminal state in the common case; if it ever comes back
-    // "running" (e.g. server chose to background it), the caller
-    // should poll getTurn — not modeled here since Odezzy's remediation
-    // flow is low-volume and synchronous by design.
-    logger.warn(`Turn ${turn.id} returned in unexpected state "${turn.state.status}"`);
-    return { turnId: turn.id, responseText: null, pendingApprovals: [] };
+    // "running" (e.g. server chose to background it), we deliberately
+    // do NOT return this the same way as "reached done with nothing
+    // pending" — that conflation was a real bug (unresolved turns and
+    // genuinely-empty-approval turns were indistinguishable to callers).
+    // A full fix would poll getTurn here to actually reach a terminal
+    // state; for now, surface 'unresolved' explicitly so ApprovalGate
+    // (the only caller that matters for safety) fails closed AND logs
+    // this as a distinct, auditable outcome rather than a silent no-op.
+    logger.warn(`Turn ${turn.id} returned in unexpected state "${turn.state.status}" — treating as unresolved, not "nothing pending."`);
+    return { turnId: turn.id, status: 'unresolved', responseText: null, pendingApprovals: [] };
   }
 
   const pendingApprovals = turn.state.requiredActions
@@ -146,7 +164,7 @@ export async function sendOdezzyTurn(
       ? turn.state.output.content
       : null;
 
-  return { turnId: turn.id, responseText, pendingApprovals };
+  return { turnId: turn.id, status: 'done', responseText, pendingApprovals };
 }
 
 /**
@@ -184,6 +202,27 @@ export async function resolveOdezzyApproval(
  * TrueForge's own UI — not just the approval step (Lever 3).
  *
  * Fires and forgets: narration failures never block the scan.
+ *
+ * AUDITED call sites (all six live in root-agent.ts, as of this pass):
+ * Scan Started, Discovery Complete, Analysis Complete, Shadow Server
+ * Detection, Probing Complete, Scan Complete. Every one narrates a
+ * result that was already computed independently (finding counts, tool
+ * counts) — none of them gate program logic on narration succeeding, and
+ * losing one would only mean that phase doesn't show up in TrueForge's
+ * UI, not that Odezzy's own findings/report/attestation are affected.
+ * Confirmed safe to keep fire-and-forget.
+ *
+ * One related but separate observation from this audit, NOT a bug: this
+ * function's `lastTurnId` return value chains narration turns to each
+ * other, but ApprovalGate (see approval-gate.ts) is constructed with no
+ * `lastTurnId` and starts its own independent turn chain via
+ * `previousTurnId: 'auto'`. So narration and approval requests currently
+ * live on two separate implicit turn chains within the same TrueForge
+ * session, rather than one linear conversation. That's a UI/threading
+ * question, not a safety one — approval correctness doesn't depend on
+ * narration's turn chain at all — so it's left as-is here rather than
+ * changed without product input on whether a single merged thread is
+ * actually desired.
  */
 export async function narrateScanPhase(
   client: TrueForge,

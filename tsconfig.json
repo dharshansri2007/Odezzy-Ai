@@ -14,7 +14,8 @@
   },
   "include": [
     "src/**/*",
-    "canary-server/**/*"
+    "canary-server/**/*",
+    "remediation-server/**/*"
   ],
   "exclude": [
     "node_modules",

@@ -117,7 +117,7 @@ export class SemanticCheckAnalyzer {
     }
 
     logger.info(`Semantic check complete: ${findings.length} finding(s), ${erroredTools.length} errored across ${tools.length} tool(s)`);
-    return { findings, erroredTools };
+    return { findings, erroredTools, activeServers: [] };
   }
 
   private async getVerdict(tool: MCPToolSchema): Promise<SemanticVerdict | null> {

@@ -18,56 +18,21 @@
  * instead of trusting a boolean flag passed in the tool call arguments
  * (which anyone — or anything — could set to true).
  *
- * TRANSPORT NOTE (Streamable HTTP, not stdio): earlier revisions of this
- * file used StdioServerTransport, on the assumption TrueForge's connector
- * UI could launch a local process via a command string. It can't — the
- * "Add MCP Server" dialog only accepts a URL pointing at a remote/HTTP MCP
- * endpoint (verified directly against that UI, not assumed). So this file
- * now serves the same tool over Streamable HTTP via Express — the current
- * (post-SSE) transport the MCP SDK ships for this exact case, per its own
- * docs at modelcontextprotocol/typescript-sdk. `sessionIdGenerator:
- * undefined` puts it in stateless mode: this server holds no per-client
- * session state (SessionStore/QuarantineRegistry/AttestationLedger are all
- * already their own persistence layer on disk), so there's nothing a
- * session would need to track between requests.
- *
  * Setup (Job 3 — manual, on TrueForge's platform, not scriptable from here):
- *   1. Run this server: `npm run remediation-server` (see package.json —
- *      listens on REMEDIATION_SERVER_PORT, default 8791).
- *   2. Make that port reachable from wherever TrueForge itself runs. If
- *      TrueForge is remote (e.g. a *.cloudshell.dev session, as opposed to
- *      literally the same machine), `http://localhost:8791/mcp` is NOT
- *      reachable from TrueForge's side — localhost there means "the box
- *      TrueForge is running on," not this one. Use Cloud Shell's Web
- *      Preview / port-forwarding to get a URL TrueForge's environment can
- *      actually reach, then use THAT url below, not localhost.
- *   3. In TrueForge → Settings → Connectors → "+ Add MCP Server":
- *        Name: anything memorable, e.g. odezzy-remediation
- *        URL: http://<reachable-host>:8791/mcp
- *        Auth type: None (this server has no auth of its own yet — see
- *          the security note below before exposing this beyond a private
- *          Cloud Shell preview URL)
- *   4. Set requireApprovalForTools: ["@all"] on that connector.
- *   5. Set that same connector name as REMEDIATION_MCP_SERVER_NAME in your
- *      .env (see src/config/parser.ts).
- *   6. Run `npm run fullscan` — a finding with an autoFixable proposal will
+ *   1. Register this server under TrueForge's Settings → Connectors,
+ *      pointing its command at: npx tsx remediation-server/server.ts
+ *   2. Set requireApprovalForTools: ["@all"] on that connector.
+ *   3. Give the connector a name, then set that same name as
+ *      REMEDIATION_MCP_SERVER_NAME in your .env (see src/config/parser.ts).
+ *   4. Run `npm run fullscan` — a finding with an autoFixable proposal will
  *      now genuinely pause in TrueForge's UI instead of failing closed.
  *
- * SECURITY NOTE: unlike stdio (where only a process on this machine could
- * ever talk to this server), an HTTP endpoint is reachable by anything that
- * can reach the port — the approval-token safety property in ApplyFix still
- * holds (nothing here trusts a boolean the caller sends), but
- * "TrueForge itself refuses to call this until a human approves" is only
- * true if TrueForge is in fact the only thing that can reach this URL.
- * Do not expose this port publicly without adding real auth (a bearer
- * token check, same shape as src/server.ts's requireApiToken) first —
- * this initial version deliberately does not add that yet, to keep the
- * transport swap itself reviewable as its own change.
+ * Run standalone (for manual testing outside TrueForge):
+ *   npm run remediation-server
  */
 
-import express from 'express';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { SessionStore } from '../src/persistence/session-store.js';
 import { FixProposer } from '../src/remediation/fix-proposer.js';
@@ -173,52 +138,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   };
 });
 
-/**
- * Stateless Streamable HTTP setup: one shared MCP `Server`/`transport` pair
- * handles every request. This is deliberate, not a shortcut — this server
- * has no per-client state to isolate (every tool call reads/writes the
- * same on-disk SessionStore/QuarantineRegistry/AttestationLedger
- * regardless of which client asked), so per-session transport bookkeeping
- * (the `transports: Record<string, StreamableHTTPServerTransport>` map
- * you'll see in most MCP HTTP examples) would add complexity without
- * adding safety here. `sessionIdGenerator: undefined` is the SDK's
- * documented way to opt into this stateless mode.
- */
 async function main() {
-  const port = Number(process.env.REMEDIATION_SERVER_PORT ?? 8791);
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  const transport = new StdioServerTransport();
   await server.connect(transport);
-
-  const app = express();
-  app.use(express.json());
-
-  app.post('/mcp', async (req, res) => {
-    try {
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[remediation-server] error handling POST /mcp:', err);
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: '2.0',
-          error: { code: -32603, message: 'Internal server error' },
-          id: null,
-        });
-      }
-    }
-  });
-
-  // GET/DELETE on /mcp are part of the Streamable HTTP spec (server-push
-  // and clean session teardown respectively) but aren't required for the
-  // single-tool, stateless case here. Respond 405 rather than silently
-  // 404ing, so a client relying on them gets an honest "not supported"
-  // instead of an ambiguous not-found.
-  app.get('/mcp', (_req, res) => res.status(405).json({ error: 'This server is stateless; GET /mcp is not supported.' }));
-  app.delete('/mcp', (_req, res) => res.status(405).json({ error: 'This server is stateless; DELETE /mcp is not supported.' }));
-
-  app.listen(port, () => {
-    console.error(`[remediation-server] listening on http://localhost:${port}/mcp (Streamable HTTP, stateless)`);
-    console.error('[remediation-server] if TrueForge runs remotely (e.g. Cloud Shell), point its connector at a URL that can actually reach this port — not localhost from TrueForge\'s side.');
-  });
+  console.error('[remediation-server] running on stdio');
 }
 
 main().catch((err) => {

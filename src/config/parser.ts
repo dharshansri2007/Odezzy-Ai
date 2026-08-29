@@ -42,6 +42,7 @@ export function loadConfig(): OdezzyConfig {
     geminiApiKey: process.env.GEMINI_API_KEY || fileConfig.geminiApiKey,
     gcpProjectId: process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || fileConfig.gcpProjectId,
     gcpLocation: process.env.GOOGLE_CLOUD_LOCATION || process.env.GCP_LOCATION || fileConfig.gcpLocation,
+    remediationMcpServerName: process.env.REMEDIATION_MCP_SERVER_NAME || fileConfig.remediationMcpServerName,
     trueforgeUrl: process.env.TRUEFORGE_URL || fileConfig.trueforgeUrl,
     trueforgeApiKey: process.env.TRUEFORGE_API_KEY || fileConfig.trueforgeApiKey,
     trueforgeModel: process.env.TRUEFORGE_MODEL || fileConfig.trueforgeModel,

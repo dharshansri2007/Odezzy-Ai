@@ -10,7 +10,6 @@ const logger = createLogger('drift-detector');
 
 const DRIFT_STABLE_THRESHOLD = 0.1;
 const DRIFT_WARNING_THRESHOLD = 0.25;
-const MIN_TEXT_CHANGE_CHARS = 15;
 
 export class DriftDetector {
   private client: GoogleGenAI;
@@ -47,9 +46,6 @@ export class DriftDetector {
 
     const currentEmbedding = await this.embed(description);
     const distance = this.cosineDistance(baseline.embedding, currentEmbedding);
-    const baselineDescription = baseline.descriptionHash; // This is the hash, not the text — we can't recover length from it
-    // Short-circuit only if the cosine distance is very small (below stable threshold)
-    // The old shortCircuit logic was broken (always true). Removed in favor of distance-only check.
 
     if (distance < DRIFT_STABLE_THRESHOLD) {
       // Small change, not meaningful — update baseline to current
@@ -108,7 +104,7 @@ export class DriftDetector {
       }
     }
     logger.info(`Drift detection complete: ${findings.length} finding(s), ${erroredTools.length} errored across ${tools.length} tool(s)`);
-    return { findings, erroredTools };
+    return { findings, erroredTools, activeServers: [] };
   }
 
   private async embed(text: string): Promise<number[]> {

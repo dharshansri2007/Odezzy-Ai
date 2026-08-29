@@ -1,6 +1,7 @@
 import { createLogger } from '../utils/logger.js';
 import { sendOdezzyTurn, resolveOdezzyApproval } from '../agent/trueforge-client.js';
 import { ApplyFix, type FixResult } from './apply-fix.js';
+import { HumanApprovalToken } from './human-approval-token.js';
 import type { TrueForge } from '@truefoundry/trueforge-sdk';
 import type { VulnerabilityFinding } from '../types/index.js';
 import type { FixProposal } from './fix-proposer.js';
@@ -35,7 +36,7 @@ export class ApprovalGate {
   public async requestApproval(
     proposal: FixProposal,
     finding: VulnerabilityFinding
-  ): Promise<{ approved: boolean; reason?: string }> {
+  ): Promise<{ approved: boolean; reason?: string; gateStatus: 'plumbing-unresolved' | 'no-request' | 'pending' }> {
     logger.info(`Requesting TrueForge approval for finding ${finding.id} (${finding.title})`);
 
     const outcome = await sendOdezzyTurn(this.client, this.sessionId, {
@@ -53,16 +54,33 @@ export class ApprovalGate {
     });
     this.lastTurnId = outcome.turnId;
 
+    if (outcome.status === 'unresolved') {
+      // The turn itself never reached a terminal state — we genuinely do
+      // not know whether TrueForge would have raised an approval request.
+      // This is NOT the same as "reviewed, nothing to approve" (see
+      // trueforge-client.ts's OdezzyTurnOutcome.status doc) — a distinct
+      // gateStatus is what lets root-agent.ts's summary tell "N findings,
+      // all failed closed because plumbing never resolved" apart from
+      // "N findings, all failed closed because they were reviewed and
+      // denied." Both fail closed identically; only the audit trail differs.
+      logger.warn(
+        `Turn for finding ${finding.id} never reached a resolved state — failing closed as unresolved, ` +
+          `NOT as reviewed-and-denied.`
+      );
+      return { approved: false, reason: 'TrueForge turn did not resolve — approval gate plumbing unresolved', gateStatus: 'plumbing-unresolved' };
+    }
+
     if (outcome.pendingApprovals.length === 0) {
-      // No approval pause was triggered — either no remediation-tools
-      // connector is registered, or the agent chose not to call it.
-      // Fail closed (never fail open on a security tool): treat as
-      // rejected rather than assuming the fix was silently applied.
+      // The turn DID reach "done" — TrueForge genuinely processed this and
+      // raised no approval request. Either no remediation-tools connector
+      // is registered, or the agent chose not to call it. Fail closed
+      // (never fail open on a security tool): treat as rejected rather
+      // than assuming the fix was silently applied.
       logger.warn(
         `No approval pause returned for finding ${finding.id} — defaulting to rejected (fail closed). ` +
           `Check that a remediation-tools MCP connector with requireApprovalForTools is registered in TrueForge.`
       );
-      return { approved: false, reason: 'No approval mechanism triggered — failed closed' };
+      return { approved: false, reason: 'No approval mechanism triggered — failed closed', gateStatus: 'no-request' };
     }
 
     // In a real run, a human resolves this via TrueForge's own chat UI
@@ -76,7 +94,7 @@ export class ApprovalGate {
       `Finding ${finding.id} is now pending human approval in TrueForge (toolCallId=${pending.toolCallId}). ` +
         `Resolve it in the TrueForge chat UI, or call resolveApproval() below programmatically once a decision is made.`
     );
-    return { approved: false, reason: 'Awaiting human resolution via TrueForge UI' };
+    return { approved: false, reason: 'Awaiting human resolution via TrueForge UI', gateStatus: 'pending' };
   }
 
   /**
@@ -114,8 +132,14 @@ export class ApprovalGate {
     }
 
     // A human approved this specific finding — now, and only now, actually apply it.
+    // Minting the token here (the only place TrueForge resolution results
+    // flow through) is what makes it structurally impossible for any other
+    // caller to fabricate an approval — apply() will not accept anything
+    // but a real HumanApprovalToken, and this is the only factory that
+    // produces one from a TrueForge decision.
     logger.info(`Approval confirmed for finding ${params.finding.id} — applying remediation.`);
-    const fixResult = await applyFix.apply(params.proposal, params.finding);
+    const token = HumanApprovalToken.fromTrueForgeResolution({ approved: true, findingId: params.finding.id });
+    const fixResult = await applyFix.apply(params.proposal, params.finding, token);
 
     if (!fixResult.applied) {
       logger.error(`Approved fix for ${params.finding.id} could not be applied: ${fixResult.error}`);
@@ -123,4 +147,4 @@ export class ApprovalGate {
 
     return { approved: true, reason: params.reason, fixResult };
   }
-}
+} 
