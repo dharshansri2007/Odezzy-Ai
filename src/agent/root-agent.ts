@@ -41,10 +41,29 @@ const logger = createLogger('root-agent');
 export class RootAgent {
   private config: OdezzyConfig;
   private remediationMcpServerName?: string;
+  private skipNarration: boolean;
 
-  constructor(config: OdezzyConfig, opts: { remediationMcpServerName?: string } = {}) {
+  constructor(config: OdezzyConfig, opts: { remediationMcpServerName?: string; skipNarration?: boolean } = {}) {
     this.config = config;
     this.remediationMcpServerName = opts.remediationMcpServerName;
+    // Narration turns are purely cosmetic (they make the scan visible in
+    // TrueForge's own chat UI) but consume from the SAME account-wide
+    // Groq TPM budget the approval turns need — and on a free-tier
+    // account, that budget is the actual bottleneck, not model choice.
+    // Default false to preserve existing behavior; pass true when quota
+    // is tight and you'd rather every available token go to approvals.
+    this.skipNarration = opts.skipNarration ?? false;
+  }
+
+  private async narrate(
+    client: ReturnType<typeof createTrueForgeClient>,
+    sessionId: string,
+    phase: string,
+    detail: string,
+    previousTurnId?: string
+  ): Promise<string | undefined> {
+    if (this.skipNarration) return previousTurnId;
+    return narrateScanPhase(client, sessionId, phase, detail, previousTurnId);
   }
 
   public async runFullScan(): Promise<{ findings: VulnerabilityFinding[]; sessionId: string; erroredTools: any[] }> {
@@ -58,7 +77,7 @@ export class RootAgent {
     });
     let lastTurnId: string | undefined;
 
-    lastTurnId = await narrateScanPhase(
+    lastTurnId = await this.narrate(
       client, sessionId, 'Scan Started',
       `Run ID: ${runId}. Scanning ${this.config.servers.length} configured server(s).`,
       lastTurnId
@@ -66,7 +85,7 @@ export class RootAgent {
 
     // 2. Discovery
     const inventory: DiscoveryResult = await new InventoryBuilder(this.config).buildInventory();
-    lastTurnId = await narrateScanPhase(
+    lastTurnId = await this.narrate(
       client, sessionId, 'Discovery Complete',
       `Found ${inventory.servers.length} server(s) with ${inventory.totalTools} total tool(s).`,
       lastTurnId
@@ -74,7 +93,7 @@ export class RootAgent {
 
     // 3. Analysis (includes static, schema, semantic, drift, attestation)
     const analysisFindings = await new AnalysisOrchestrator(this.config).runAnalysis(inventory);
-    lastTurnId = await narrateScanPhase(
+    lastTurnId = await this.narrate(
       client, sessionId, 'Analysis Complete',
       `Analysis pipeline produced ${analysisFindings.findings.length} finding(s), ${analysisFindings.erroredTools.length} tool(s) errored.`,
       lastTurnId
@@ -84,7 +103,7 @@ export class RootAgent {
     const shadowDetector = new ShadowServerDetector();
     const shadowResult = await shadowDetector.detect(client as any, this.config);
     if (shadowResult.findings.length > 0) {
-      lastTurnId = await narrateScanPhase(
+      lastTurnId = await this.narrate(
         client, sessionId, 'Shadow Server Detection',
         `Detected ${shadowResult.findings.length} shadow server finding(s) via TrueForge registry cross-reference.`,
         lastTurnId
@@ -96,7 +115,7 @@ export class RootAgent {
       (this.config.servers as ServerConfig[]).map((s) => [s.name, s])
     );
     const probingFindings = await runProbesForServers(analysisFindings.activeServers, serverConfigs);
-    lastTurnId = await narrateScanPhase(
+    lastTurnId = await this.narrate(
       client, sessionId, 'Probing Complete',
       `Adversarial probing produced ${probingFindings.length} finding(s).`,
       lastTurnId
@@ -130,7 +149,31 @@ export class RootAgent {
     for (const proposal of proposals) {
       const finding = allFindings.find((f) => f.id === proposal.findingId);
       if (!finding) continue;
-      const decision = await gate.requestApproval(proposal, finding);
+      // A small delay between approval requests, NOT because more speed is
+      // unsafe, but because Groq's free-tier TPM limit (8000 tokens/minute)
+      // is per-ORGANIZATION, not per-model — swapping models never fixes
+      // this, since every model on the same account shares one bucket.
+      // Firing 19 approval turns back-to-back reliably exhausts that
+      // bucket in seconds, which is why every turn was landing on
+      // "running" (rate-limited, never reached "done") rather than an
+      // actual approval/denial. This delay is a mitigation, not a fix —
+      // the real fix is a paid tier or fewer LLM-backed turns per run.
+      if (gateSummary.totalRequests > 0 && this.config.approvalRequestDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.config.approvalRequestDelayMs));
+      }
+      let decision: { approved: boolean; reason?: string; gateStatus: 'plumbing-unresolved' | 'no-request' | 'pending' };
+      try {
+        decision = await gate.requestApproval(proposal, finding);
+      } catch (err) {
+        // A single TrueForge-side failure (rate limit, a stuck thread from
+        // a PRIOR finding's turn never resolving, transient 5xx, etc.)
+        // must not discard every finding already gathered by discovery /
+        // analysis / probing. Treat this finding's approval as unresolved
+        // — same fail-closed semantics as a non-"done" turn state — and
+        // move on to the next finding rather than crashing the whole run.
+        logger.error(`Approval request for finding ${finding.id} threw — treating as unresolved, continuing scan`, err);
+        decision = { approved: false, reason: `Approval request errored: ${err instanceof Error ? err.message : String(err)}`, gateStatus: 'plumbing-unresolved' };
+      }
       logger.info(`Approval decision for ${finding.id}: ${decision.approved ? 'approved' : decision.reason}`);
       gateSummary.totalRequests++;
       if (decision.gateStatus === 'plumbing-unresolved') {
@@ -173,7 +216,7 @@ export class RootAgent {
     });
 
     // 9. Final narration
-    await narrateScanPhase(
+    await this.narrate(
       client, sessionId, 'Scan Complete',
       `Total: ${allFindings.length} finding(s), ${allErroredTools.length} errored tool(s). ` +
       `TrueForge session ${sessionId}. Run ID: ${runId}.`,

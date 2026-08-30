@@ -186,7 +186,16 @@ export const OdezzyConfigSchema = z.object({
   /** Bearer token for the TrueForge server, if auth is enabled. Not required in local single-user mode. */
   trueforgeApiKey: z.string().optional(),
   /** Model FQN passed to TrueForge,  (provider/model). */
-  trueforgeModel: z.string().default('grok/grok-4-1-fast'),
+  trueforgeModel: z.string().default('groq/gpt-oss-120b'),
+  /**
+   * Delay between successive TrueForge approval-request turns. Exists
+   * because free-tier LLM providers (Groq's on-demand tier, etc.) apply
+   * an account-wide tokens-per-minute cap — not a per-model one — so
+   * firing many approval turns back-to-back reliably exhausts it and
+   * every turn lands on "running" (rate-limited) instead of resolving.
+   * Set to 0 to disable (e.g. in tests, or against a paid/higher-limit tier).
+   */
+  approvalRequestDelayMs: z.number().default(4000),
   scanOptions: z.object({
     maxConcurrency: z.number().default(3),
     timeoutMs: z.number().default(30000),
