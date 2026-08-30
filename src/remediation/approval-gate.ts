@@ -40,7 +40,16 @@ export class ApprovalGate {
     logger.info(`Requesting TrueForge approval for finding ${finding.id} (${finding.title})`);
 
     const outcome = await sendOdezzyTurn(this.client, this.sessionId, {
-      previousTurnId: this.lastTurnId ?? 'auto',
+      // Deliberately 'none' (fresh root turn), NOT this.lastTurnId ?? 'auto'.
+      // Chaining every finding's approval request onto the previous one
+      // meant a single stuck turn (rate-limited, left "pending" mid-execution,
+      // etc.) poisoned TrueForge's main thread for every finding after it —
+      // TrueForge refuses ANY new message on a thread with something still
+      // pending ("thread main: user message cannot be sent while approvals
+      // or questions are pending"), so one bad finding could silently
+      // fail-closed the entire rest of the run. Independent root turns per
+      // finding mean that failure is contained to just that one finding.
+      previousTurnId: 'none',
       input: [
         {
           type: 'user.message',

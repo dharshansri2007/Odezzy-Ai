@@ -46,6 +46,9 @@ export function loadConfig(): OdezzyConfig {
     trueforgeUrl: process.env.TRUEFORGE_URL || fileConfig.trueforgeUrl,
     trueforgeApiKey: process.env.TRUEFORGE_API_KEY || fileConfig.trueforgeApiKey,
     trueforgeModel: process.env.TRUEFORGE_MODEL || fileConfig.trueforgeModel,
+    approvalRequestDelayMs: process.env.APPROVAL_REQUEST_DELAY_MS
+      ? Number(process.env.APPROVAL_REQUEST_DELAY_MS)
+      : fileConfig.approvalRequestDelayMs,
   };
 
   return validateConfig(mergedConfig);
