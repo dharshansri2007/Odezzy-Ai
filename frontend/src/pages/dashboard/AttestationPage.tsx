@@ -1,6 +1,7 @@
 import { useApi } from '@/hooks/use-api';
 import { api } from '@/lib/api';
-import { LoadingState, ErrorState, EmptyState } from '@/components/dashboard/LoadingState';
+import { StatCard } from '@/components/dashboard/StatCard';
+import { LoadingState, EmptyState } from '@/components/dashboard/LoadingState';
 import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { Award, Key, ShieldCheck, ShieldX } from 'lucide-react';
 
@@ -9,7 +10,6 @@ export function AttestationPage() {
   const pubKey = useApi(() => api.getAttestationPublicKey(), []);
 
   if (ledger.loading) return <LoadingState message="Loading attestation ledger..." />;
-  if (ledger.error) return <ErrorState message={ledger.error} onRetry={ledger.refetch} />;
 
   const records = ledger.data?.records || [];
   const attested = records.filter((r) => r.status === 'attested');
@@ -18,45 +18,23 @@ export function AttestationPage() {
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Attestation Ledger</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Ed25519-signed, hash-chained cryptographic trust records
-        </p>
+        <h2 className="text-2xl font-semibold tracking-tight">Attestation Ledger</h2>
+        <p className="mt-1 text-sm text-muted-foreground">Ed25519-signed, hash-chained cryptographic trust records</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3 mb-8">
-        <div className="surface p-6">
-          <div className="flex items-center gap-2">
-            <Award className="size-5 text-primary" />
-            <p className="text-sm font-medium text-muted-foreground">Total Records</p>
-          </div>
-          <p className="mt-2 font-mono text-3xl font-semibold">{records.length}</p>
-        </div>
-        <div className="surface p-6">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="size-5 text-safe" />
-            <p className="text-sm font-medium text-muted-foreground">Attested</p>
-          </div>
-          <p className="mt-2 font-mono text-3xl font-semibold text-safe">{attested.length}</p>
-        </div>
-        <div className="surface p-6">
-          <div className="flex items-center gap-2">
-            <ShieldX className="size-5 text-danger" />
-            <p className="text-sm font-medium text-muted-foreground">Revoked</p>
-          </div>
-          <p className="mt-2 font-mono text-3xl font-semibold text-danger">{revoked.length}</p>
-        </div>
+      <div className="mb-8 grid gap-4 md:grid-cols-3">
+        <StatCard title="Total Records" value={records.length} icon={Award} style={{ ['--stagger' as string]: 0 }} />
+        <StatCard title="Attested" value={attested.length} icon={ShieldCheck} variant="success" style={{ ['--stagger' as string]: 1 }} />
+        <StatCard title="Revoked" value={revoked.length} icon={ShieldX} variant="danger" style={{ ['--stagger' as string]: 2 }} />
       </div>
 
       {pubKey.data?.publicKey && (
-        <div className="surface mb-8 p-4">
-          <div className="flex items-center gap-2 mb-2">
+        <div className="surface fade-up mb-8 p-4" style={{ ['--stagger' as string]: 3 }}>
+          <div className="mb-2 flex items-center gap-2">
             <Key className="size-4 text-cyan" />
             <p className="text-xs font-medium text-muted-foreground">Public Key (Ed25519)</p>
           </div>
-          <pre className="font-mono text-[11px] text-muted-foreground overflow-x-auto">
-            {pubKey.data.publicKey}
-          </pre>
+          <pre className="overflow-x-auto font-mono text-[11px] text-muted-foreground">{pubKey.data.publicKey}</pre>
         </div>
       )}
 
@@ -67,11 +45,10 @@ export function AttestationPage() {
           {records.map((r, i) => (
             <div
               key={`${r.toolName}-${r.serverName}-${r.timestamp}-${i}`}
-              className={`surface p-5 transition-all ${
-                r.status === 'revoked' ? 'border-danger/30 bg-danger/5' : 'border-safe/20'
-              }`}
+              className={`surface lift fade-up p-5 ${r.status === 'revoked' ? 'border-danger/30 bg-danger/5' : 'border-safe/20'}`}
+              style={{ ['--stagger' as string]: Math.min(i, 8) }}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-3">
                   {r.status === 'attested' ? (
                     <ShieldCheck className="size-5 text-safe" />
@@ -83,9 +60,7 @@ export function AttestationPage() {
                     <p className="text-xs text-muted-foreground">on {r.serverName}</p>
                   </div>
                 </div>
-                <StatusBadge variant={r.status === 'attested' ? 'success' : 'critical'}>
-                  {r.status}
-                </StatusBadge>
+                <StatusBadge variant={r.status === 'attested' ? 'success' : 'critical'}>{r.status}</StatusBadge>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                 <div>
@@ -109,9 +84,7 @@ export function AttestationPage() {
                 <div className="mt-3 rounded-lg bg-danger/10 p-3">
                   <p className="text-xs font-medium text-danger">Revocation Reason</p>
                   <p className="mt-1 text-xs text-muted-foreground">{r.revokedReason}</p>
-                  {r.revokedAt && (
-                    <p className="mt-1 text-xs text-muted-foreground">Revoked: {new Date(r.revokedAt).toLocaleString()}</p>
-                  )}
+                  {r.revokedAt && <p className="mt-1 text-xs text-muted-foreground">Revoked: {new Date(r.revokedAt).toLocaleString()}</p>}
                 </div>
               )}
             </div>

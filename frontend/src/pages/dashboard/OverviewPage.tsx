@@ -1,7 +1,7 @@
-import { Shield, Bug, Award, Ban, Server, AlertTriangle } from 'lucide-react';
+import { Shield, Bug, Award, Ban } from 'lucide-react';
 import { StatCard } from '@/components/dashboard/StatCard';
-import { StatusBadge, GradeBadge, SeverityBadge } from '@/components/dashboard/StatusBadge';
-import { LoadingState, ErrorState, EmptyState } from '@/components/dashboard/LoadingState';
+import { StatusBadge, SeverityBadge } from '@/components/dashboard/StatusBadge';
+import { LoadingState, EmptyState } from '@/components/dashboard/LoadingState';
 import { useApi } from '@/hooks/use-api';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -11,7 +11,6 @@ export function OverviewPage() {
   const attestation = useApi(() => api.getAttestationLedger(), []);
   const quarantine = useApi(() => api.getQuarantineLog(), []);
 
-  // Load latest session details if sessions exist
   const latestSessionId = sessions.data?.sessions?.[sessions.data.sessions.length - 1];
   const latestSession = useApi(
     () => (latestSessionId ? api.getSession(latestSessionId) : Promise.resolve(null)),
@@ -19,8 +18,6 @@ export function OverviewPage() {
   );
 
   const isLoading = sessions.loading || attestation.loading || quarantine.loading;
-  const hasError = sessions.error || attestation.error;
-
   if (isLoading) return <LoadingState message="Loading dashboard data..." />;
 
   const sessionData = latestSession.data;
@@ -38,18 +35,11 @@ export function OverviewPage() {
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard Overview</h1>
+        <h2 className="text-2xl font-semibold tracking-tight">Dashboard Overview</h2>
         <p className="mt-1 text-sm text-muted-foreground">
           MCP Security Red-Teaming Agent — monitoring your tool supply chain
         </p>
       </div>
-
-      {hasError && (
-        <div className="mb-6 surface border-danger/30 bg-danger/5 p-4 text-sm text-danger">
-          <AlertTriangle className="inline size-4 mr-2" />
-          Backend not reachable. Start the API server with <code className="font-mono bg-danger/10 px-1 rounded">npm run api</code> on port 8790.
-        </div>
-      )}
 
       {/* Stats Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -59,12 +49,14 @@ export function OverviewPage() {
           subtitle={`${severityCounts.critical} critical, ${severityCounts.high} high`}
           icon={Bug}
           variant={severityCounts.critical > 0 ? 'danger' : 'default'}
+          style={{ ['--stagger' as string]: 0 }}
         />
         <StatCard
           title="Scan Sessions"
           value={totalSessions}
           subtitle={sessionData?.completedAt ? `Latest: ${new Date(sessionData.completedAt).toLocaleDateString()}` : 'No scans yet'}
           icon={Shield}
+          style={{ ['--stagger' as string]: 1 }}
         />
         <StatCard
           title="Attested Tools"
@@ -72,6 +64,7 @@ export function OverviewPage() {
           subtitle={`${revokedCount} revoked`}
           icon={Award}
           variant="success"
+          style={{ ['--stagger' as string]: 2 }}
         />
         <StatCard
           title="Quarantined"
@@ -79,13 +72,14 @@ export function OverviewPage() {
           subtitle="Tools permanently banned"
           icon={Ban}
           variant={quarantinedCount > 0 ? 'danger' : 'default'}
+          style={{ ['--stagger' as string]: 3 }}
         />
       </div>
 
       {/* Recent Findings */}
       {findings.length > 0 && (
-        <div className="mt-8">
-          <h2 className="text-lg font-semibold mb-4">Recent Findings</h2>
+        <div className="fade-up mt-8" style={{ ['--stagger' as string]: 4 }}>
+          <h3 className="mb-4 text-lg font-semibold">Recent Findings</h3>
           <div className="surface overflow-hidden">
             <table className="w-full text-sm">
               <thead>
@@ -100,15 +94,15 @@ export function OverviewPage() {
               </thead>
               <tbody>
                 {findings.slice(0, 10).map((f) => (
-                  <tr key={f.id} className="border-b border-border last:border-0 hover:bg-elevated/50 transition-colors">
+                  <tr key={f.id} className="border-b border-border transition-colors last:border-0 hover:bg-elevated/50">
                     <td className="px-4 py-3"><SeverityBadge severity={f.severity} /></td>
                     <td className="px-4 py-3 font-medium">{f.title}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{f.toolName}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{f.serverName}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{f.toolName}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{f.serverName}</td>
                     <td className="px-4 py-3">
                       <StatusBadge variant="neutral">{f.category}</StatusBadge>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs">{(f.confidence * 100).toFixed(0)}%</td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{(f.confidence * 100).toFixed(0)}%</td>
                   </tr>
                 ))}
               </tbody>
@@ -120,41 +114,40 @@ export function OverviewPage() {
       {/* Severity Distribution */}
       {findings.length > 0 && (
         <div className="mt-8 grid gap-4 md:grid-cols-2">
-          <div className="surface p-6">
-            <h3 className="text-sm font-medium text-muted-foreground mb-4">Severity Distribution</h3>
+          <div className="surface fade-up p-6" style={{ ['--stagger' as string]: 5 }}>
+            <h3 className="mb-4 text-sm font-medium text-muted-foreground">Severity Distribution</h3>
             <div className="space-y-3">
               {Object.entries(severityCounts).map(([sev, count]) => (
                 <div key={sev} className="flex items-center gap-3">
                   <SeverityBadge severity={sev} />
-                  <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
                     <div
                       className={cn(
-                        'h-full rounded-full transition-all duration-500',
-                        sev === 'critical' || sev === 'high' ? 'bg-danger' :
-                        sev === 'medium' ? 'bg-amber-500' : 'bg-cyan'
+                        'h-full rounded-full transition-all duration-700 ease-out',
+                        sev === 'critical' || sev === 'high' ? 'bg-danger' : sev === 'medium' ? 'bg-amber-500' : 'bg-cyan'
                       )}
                       style={{ width: `${findings.length ? (count / findings.length) * 100 : 0}%` }}
                     />
                   </div>
-                  <span className="font-mono text-xs text-muted-foreground w-8 text-right">{count}</span>
+                  <span className="w-8 text-right font-mono text-xs text-muted-foreground">{count}</span>
                 </div>
               ))}
             </div>
           </div>
 
           {sessionData?.approvalGateSummary && (
-            <div className="surface p-6">
-              <h3 className="text-sm font-medium text-muted-foreground mb-4">Approval Gate Summary</h3>
+            <div className="surface fade-up p-6" style={{ ['--stagger' as string]: 6 }}>
+              <h3 className="mb-4 text-sm font-medium text-muted-foreground">Approval Gate Summary</h3>
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg bg-safe/5 border border-safe/20 p-3">
+                <div className="rounded-lg border border-safe/20 bg-safe/5 p-3">
                   <p className="font-mono text-xl font-semibold text-safe">{sessionData.approvalGateSummary.approved}</p>
                   <p className="text-xs text-muted-foreground">Approved</p>
                 </div>
-                <div className="rounded-lg bg-danger/5 border border-danger/20 p-3">
+                <div className="rounded-lg border border-danger/20 bg-danger/5 p-3">
                   <p className="font-mono text-xl font-semibold text-danger">{sessionData.approvalGateSummary.deniedReviewed}</p>
                   <p className="text-xs text-muted-foreground">Denied</p>
                 </div>
-                <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-3">
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
                   <p className="font-mono text-xl font-semibold text-amber-500">{sessionData.approvalGateSummary.pending}</p>
                   <p className="text-xs text-muted-foreground">Pending</p>
                 </div>
@@ -168,9 +161,7 @@ export function OverviewPage() {
         </div>
       )}
 
-      {findings.length === 0 && !hasError && (
-        <EmptyState message="No scan data yet. Run a scan from the Scans tab or via CLI." />
-      )}
+      {findings.length === 0 && <EmptyState message="No scan data yet. Run a scan from the Scans tab or via CLI." />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { useApi } from '@/hooks/use-api';
 import { api } from '@/lib/api';
-import { LoadingState, ErrorState, EmptyState } from '@/components/dashboard/LoadingState';
+import { LoadingState, EmptyState } from '@/components/dashboard/LoadingState';
 import { StatusBadge } from '@/components/dashboard/StatusBadge';
 import { Server, Wrench } from 'lucide-react';
 
@@ -13,26 +13,23 @@ export function ServersPage() {
   );
 
   if (sessions.loading || session.loading) return <LoadingState message="Loading servers..." />;
-  if (sessions.error) return <ErrorState message={sessions.error} onRetry={sessions.refetch} />;
 
   const servers = session.data?.discoveryResult?.servers || [];
 
   return (
     <div className="p-8">
       <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Discovered Servers</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          MCP servers and their exposed tools
-        </p>
+        <h2 className="text-2xl font-semibold tracking-tight">Discovered Servers</h2>
+        <p className="mt-1 text-sm text-muted-foreground">MCP servers and their exposed tools</p>
       </div>
 
       {servers.length === 0 ? (
         <EmptyState message="No servers discovered yet. Run a scan first." />
       ) : (
         <div className="space-y-4">
-          {servers.map((server) => (
-            <div key={server.serverName} className="surface p-6">
-              <div className="flex items-center gap-3">
+          {servers.map((server, i) => (
+            <div key={server.serverName} className="surface fade-up p-6" style={{ ['--stagger' as string]: i }}>
+              <div className="flex flex-wrap items-center gap-3">
                 <div className="rounded-xl bg-primary/10 p-2.5">
                   <Server className="size-5 text-primary" />
                 </div>
@@ -47,20 +44,20 @@ export function ServersPage() {
               </div>
 
               <div className="mt-4">
-                <p className="text-xs font-medium text-muted-foreground mb-2">
-                  <Wrench className="inline size-3 mr-1" />
+                <p className="mb-2 text-xs font-medium text-muted-foreground">
+                  <Wrench className="mr-1 inline size-3" />
                   {server.tools.length} tool(s)
                 </p>
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {server.tools.map((tool) => (
-                    <div key={tool.name} className="rounded-lg border border-border p-3">
+                    <div key={tool.name} className="rounded-lg border border-border p-3 transition-colors hover:border-cyan/30">
                       <p className="font-mono text-sm font-medium">{tool.name}</p>
                       {tool.description && (
-                        <p className="mt-1 text-xs text-muted-foreground line-clamp-2">{tool.description}</p>
+                        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{tool.description}</p>
                       )}
                       {tool.inputSchema?.properties && (
                         <p className="mt-2 font-mono text-[10px] text-muted-foreground">
-                          params: {Object.keys(tool.inputSchema.properties).join(', ')}
+                          params: {Object.keys(tool.inputSchema.properties).join(', ') || 'none declared'}
                         </p>
                       )}
                     </div>
