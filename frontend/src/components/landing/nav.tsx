@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Github, Moon, Sun, LayoutDashboard } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTheme } from '@/lib/theme';
 import { GITHUB_URL } from './data';
 
 const LINKS = [
@@ -14,7 +15,8 @@ const LINKS = [
 
 export function Nav({ scroller }: { scroller?: React.RefObject<HTMLDivElement | null> }) {
   const [scrolled, setScrolled] = useState(false);
-  const [light, setLight] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+  const light = theme === 'light';
 
   useEffect(() => {
     const el = scroller?.current;
@@ -27,10 +29,6 @@ export function Nav({ scroller }: { scroller?: React.RefObject<HTMLDivElement | 
     onScroll();
     return () => target.removeEventListener('scroll', onScroll);
   }, [scroller]);
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('light', light);
-  }, [light]);
 
   return (
     <header
@@ -70,9 +68,9 @@ export function Nav({ scroller }: { scroller?: React.RefObject<HTMLDivElement | 
           </Link>
           <button
             type="button"
-            onClick={() => setLight((v) => !v)}
+            onClick={toggleTheme}
             aria-label={light ? 'Switch to dark mode' : 'Switch to light mode'}
-            className="grid size-9 place-items-center rounded-full border border-border text-muted-foreground transition-colors hover:text-foreground"
+            className="grid size-9 place-items-center rounded-full border border-border text-muted-foreground transition-all duration-300 hover:border-cyan/40 hover:text-foreground active:scale-90"
           >
             {light ? <Moon className="size-4" /> : <Sun className="size-4" />}
           </button>

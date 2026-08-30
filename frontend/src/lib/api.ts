@@ -1,3 +1,16 @@
+import { setDemoMode } from './demo-mode';
+import {
+  DEMO_SESSIONS_LIST,
+  DEMO_SESSION,
+  DEMO_ATTESTATION_LEDGER,
+  DEMO_PUBLIC_KEY,
+  DEMO_QUARANTINE_LOG,
+  DEMO_REPORT,
+  DEMO_SERVERS,
+  DEMO_RISK_SCORES,
+  DEMO_LOGS,
+} from './demo-data';
+
 const API_BASE = '/api';
 
 export interface MCPToolSchema {
@@ -123,38 +136,75 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+/**
+ * Calls the real API; if it's unreachable (server not running, network
+ * error, non-2xx), flips global demo mode on and resolves with the given
+ * fixture instead of throwing. Every read endpoint below goes through this
+ * so the dashboard always has something real-shaped to render — see
+ * lib/demo-data.ts and lib/demo-mode.ts.
+ */
+async function withDemoFallback<T>(url: string, fallback: T, options?: RequestInit): Promise<T> {
+  try {
+    const result = await fetchJson<T>(url, options);
+    setDemoMode(false);
+    return result;
+  } catch {
+    setDemoMode(true);
+    return fallback;
+  }
+}
+
 export const api = {
   // Health
-  health: () => fetchJson<{ status: string; version: string }>('/health'),
+  health: () =>
+    withDemoFallback<{ status: string; version: string }>('/health', {
+      status: 'demo',
+      version: '0.1.0',
+    }),
 
   // Sessions
-  listSessions: () => fetchJson<{ sessions: string[] }>('/sessions'),
-  getSession: (id: string) => fetchJson<ScanSession>(`/sessions/${id}`),
+  listSessions: () =>
+    withDemoFallback<{ sessions: string[] }>('/sessions', { sessions: DEMO_SESSIONS_LIST }),
+  getSession: (id: string) =>
+    withDemoFallback<ScanSession>(`/sessions/${id}`, { ...DEMO_SESSION, id }),
 
   // Scans
   startScan: (options?: { skipDrift?: boolean }) =>
-    fetchJson<{ sessionId: string; message: string }>('/scan', {
-      method: 'POST',
-      body: JSON.stringify(options || {}),
-    }),
+    withDemoFallback<{ sessionId: string; message: string }>(
+      '/scan',
+      { sessionId: DEMO_SESSION.id, message: 'Demo mode: no live API server — showing a sample session instead.' },
+      { method: 'POST', body: JSON.stringify(options || {}) }
+    ),
 
   // Attestation
-  getAttestationLedger: () => fetchJson<{ records: AttestationRecord[] }>('/attestation/ledger'),
-  getAttestationPublicKey: () => fetchJson<{ publicKey: string }>('/attestation/public-key'),
+  getAttestationLedger: () =>
+    withDemoFallback<{ records: AttestationRecord[] }>('/attestation/ledger', {
+      records: DEMO_ATTESTATION_LEDGER,
+    }),
+  getAttestationPublicKey: () =>
+    withDemoFallback<{ publicKey: string }>('/attestation/public-key', { publicKey: DEMO_PUBLIC_KEY }),
 
   // Quarantine
-  getQuarantineLog: () => fetchJson<{ records: QuarantineRecord[] }>('/quarantine/log'),
-  getQuarantineIntegrity: () => fetchJson<{ valid: boolean; brokenAtIndex?: number }>('/quarantine/integrity'),
+  getQuarantineLog: () =>
+    withDemoFallback<{ records: QuarantineRecord[] }>('/quarantine/log', { records: DEMO_QUARANTINE_LOG }),
+  getQuarantineIntegrity: () =>
+    withDemoFallback<{ valid: boolean; brokenAtIndex?: number }>('/quarantine/integrity', { valid: true }),
 
   // Reports
-  getLatestReport: () => fetchJson<ScanReport>('/reports/latest'),
+  getLatestReport: () => withDemoFallback<ScanReport>('/reports/latest', DEMO_REPORT),
 
   // Discovery
-  getDiscovery: () => fetchJson<{ servers: MCPServerInventory[]; totalTools: number }>('/discovery'),
+  getDiscovery: () =>
+    withDemoFallback<{ servers: MCPServerInventory[]; totalTools: number }>('/discovery', {
+      servers: DEMO_SERVERS,
+      totalTools: DEMO_SERVERS.reduce((n, s) => n + s.tools.length, 0),
+    }),
 
   // Risk scores
-  getRiskScores: (sessionId: string) => fetchJson<{ scores: RiskScore[] }>(`/sessions/${sessionId}/scores`),
+  getRiskScores: (sessionId: string) =>
+    withDemoFallback<{ scores: RiskScore[] }>(`/sessions/${sessionId}/scores`, { scores: DEMO_RISK_SCORES }),
 
   // Logs
-  getLogs: (lines?: number) => fetchJson<{ logs: string[] }>(`/logs?lines=${lines || 100}`),
+  getLogs: (lines?: number) =>
+    withDemoFallback<{ logs: string[] }>(`/logs?lines=${lines || 100}`, { logs: DEMO_LOGS }),
 };

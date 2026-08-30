@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Search, Play, RefreshCw } from 'lucide-react';
+import { Play, RefreshCw, Server } from 'lucide-react';
 import { useApi } from '@/hooks/use-api';
-import { api, type ScanSession } from '@/lib/api';
-import { LoadingState, ErrorState, EmptyState } from '@/components/dashboard/LoadingState';
+import { api } from '@/lib/api';
+import { LoadingState, EmptyState } from '@/components/dashboard/LoadingState';
 import { StatusBadge, SeverityBadge } from '@/components/dashboard/StatusBadge';
+import { cn } from '@/lib/utils';
 
 export function ScansPage() {
   const sessions = useApi(() => api.listSessions(), []);
@@ -20,7 +21,7 @@ export function ScansPage() {
     setScanMessage('');
     try {
       const result = await api.startScan();
-      setScanMessage(`Scan started! Session ID: ${result.sessionId}`);
+      setScanMessage(result.message || `Scan started — session ${result.sessionId}`);
       sessions.refetch();
     } catch (err) {
       setScanMessage(`Failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
@@ -30,18 +31,15 @@ export function ScansPage() {
   };
 
   if (sessions.loading) return <LoadingState message="Loading scan sessions..." />;
-  if (sessions.error) return <ErrorState message={sessions.error} onRetry={sessions.refetch} />;
 
   const sessionIds = sessions.data?.sessions || [];
 
   return (
     <div className="p-8">
-      <div className="flex items-center justify-between mb-8">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Scan Sessions</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            View past scans or trigger a new security analysis
-          </p>
+          <h2 className="text-2xl font-semibold tracking-tight">Scan Sessions</h2>
+          <p className="mt-1 text-sm text-muted-foreground">View past scans or trigger a new security analysis</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -54,36 +52,34 @@ export function ScansPage() {
           <button
             onClick={handleStartScan}
             disabled={scanRunning}
-            className="glow-hover bg-gradient-brand inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            className="glow-hover bg-gradient-brand inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-primary-foreground transition-transform active:scale-95 disabled:opacity-50"
           >
-            <Play className="size-4" />
+            <Play className={cn('size-4', scanRunning && 'animate-pulse')} />
             {scanRunning ? 'Scanning...' : 'Start New Scan'}
           </button>
         </div>
       </div>
 
-      {scanMessage && (
-        <div className="mb-4 surface p-3 text-sm">
-          {scanMessage}
-        </div>
-      )}
+      {scanMessage && <div className="fade-up surface mb-4 p-3 text-sm">{scanMessage}</div>}
 
       {sessionIds.length === 0 ? (
         <EmptyState message="No scan sessions found. Start a scan to begin." />
       ) : (
         <div className="grid gap-4 lg:grid-cols-3">
           {/* Session List */}
-          <div className="lg:col-span-1 space-y-2">
-            {sessionIds.map((id) => (
+          <div className="space-y-2 lg:col-span-1">
+            {sessionIds.map((id, i) => (
               <button
                 key={id}
                 onClick={() => setSelectedId(id)}
-                className={`surface w-full p-4 text-left transition-all hover:border-cyan/40 ${
-                  selectedId === id ? 'border-cyan/50 shadow-[var(--glow-brand)]' : ''
-                }`}
+                style={{ ['--stagger' as string]: i }}
+                className={cn(
+                  'surface lift fade-up w-full p-4 text-left transition-colors hover:border-cyan/40',
+                  selectedId === id && 'border-cyan/50 shadow-[var(--glow-brand)]'
+                )}
               >
                 <p className="font-mono text-xs text-muted-foreground">Session</p>
-                <p className="mt-1 font-mono text-xs truncate">{id}</p>
+                <p className="mt-1 truncate font-mono text-xs">{id}</p>
               </button>
             ))}
           </div>
@@ -91,18 +87,19 @@ export function ScansPage() {
           {/* Session Detail */}
           <div className="lg:col-span-2">
             {!selectedId ? (
-              <div className="surface p-8 text-center text-muted-foreground text-sm">
+              <div className="surface flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
+                <Server className="size-5" />
                 Select a session to view details
               </div>
             ) : selectedSession.loading ? (
               <LoadingState message="Loading session details..." />
             ) : selectedSession.data ? (
-              <div className="surface p-6 space-y-6">
+              <div className="surface fade-up space-y-6 p-6">
                 <div>
                   <h3 className="font-semibold">Session Details</h3>
-                  <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <dl className="mt-3 grid grid-cols-2 gap-y-2 text-sm">
                     <dt className="text-muted-foreground">ID</dt>
-                    <dd className="font-mono text-xs truncate">{selectedSession.data.id}</dd>
+                    <dd className="truncate font-mono text-xs">{selectedSession.data.id}</dd>
                     <dt className="text-muted-foreground">Started</dt>
                     <dd>{new Date(selectedSession.data.startedAt).toLocaleString()}</dd>
                     <dt className="text-muted-foreground">Completed</dt>
@@ -118,18 +115,22 @@ export function ScansPage() {
 
                 {selectedSession.data.findings.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium mb-3">Findings</h4>
+                    <h4 className="mb-3 text-sm font-medium">Findings</h4>
                     <div className="space-y-2">
                       {selectedSession.data.findings.map((f) => (
-                        <div key={f.id} className="rounded-lg border border-border p-3">
+                        <div key={f.id} className="rounded-lg border border-border p-3 transition-colors hover:border-cyan/30">
                           <div className="flex items-center gap-2">
                             <SeverityBadge severity={f.severity} />
-                            <span className="font-medium text-sm">{f.title}</span>
+                            <span className="text-sm font-medium">{f.title}</span>
                           </div>
                           <p className="mt-1 text-xs text-muted-foreground">{f.description}</p>
-                          <div className="mt-2 flex items-center gap-4 text-xs text-muted-foreground">
-                            <span>Tool: <code className="font-mono">{f.toolName}</code></span>
-                            <span>Server: <code className="font-mono">{f.serverName}</code></span>
+                          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                            <span>
+                              Tool: <code className="font-mono">{f.toolName}</code>
+                            </span>
+                            <span>
+                              Server: <code className="font-mono">{f.serverName}</code>
+                            </span>
                             <StatusBadge variant="neutral">{f.category}</StatusBadge>
                           </div>
                         </div>

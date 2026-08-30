@@ -7,13 +7,13 @@ interface StatusBadgeProps {
 }
 
 const VARIANTS: Record<StatusBadgeProps['variant'], string> = {
-  critical: 'bg-danger/10 text-danger border-danger/30',
-  high: 'bg-danger/10 text-danger border-danger/30',
-  medium: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
-  low: 'bg-cyan/10 text-cyan border-cyan/30',
+  critical: 'bg-danger/10 text-danger border-danger/25',
+  high: 'bg-danger/10 text-danger border-danger/25',
+  medium: 'bg-amber-500/10 text-amber-500 border-amber-500/25',
+  low: 'bg-cyan/10 text-cyan border-cyan/25',
   info: 'bg-muted text-muted-foreground border-border',
-  success: 'bg-safe/10 text-safe border-safe/30',
-  warning: 'bg-amber-500/10 text-amber-500 border-amber-500/30',
+  success: 'bg-safe/10 text-safe border-safe/25',
+  warning: 'bg-amber-500/10 text-amber-500 border-amber-500/25',
   neutral: 'bg-muted text-muted-foreground border-border',
 };
 
@@ -21,7 +21,7 @@ export function StatusBadge({ variant, children, className }: StatusBadgeProps) 
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full border px-2.5 py-1 font-mono text-[10px] font-medium tracking-wider uppercase',
+        'inline-flex items-center gap-1 rounded-full border px-2.5 py-1 font-mono text-[10px] font-medium tracking-wider uppercase transition-colors',
         VARIANTS[variant],
         className
       )}
@@ -33,15 +33,11 @@ export function StatusBadge({ variant, children, className }: StatusBadgeProps) 
 
 export function GradeBadge({ grade }: { grade: string }) {
   const variant =
-    grade === 'A' || grade === 'B'
-      ? 'success'
-      : grade === 'C'
-        ? 'warning'
-        : 'critical';
+    grade === 'A' || grade === 'B' ? 'success' : grade === 'C' ? 'warning' : 'critical';
   return (
     <span
       className={cn(
-        'inline-flex size-10 items-center justify-center rounded-xl font-mono text-lg font-bold',
+        'inline-flex size-10 shrink-0 items-center justify-center rounded-xl border font-mono text-lg font-bold',
         VARIANTS[variant]
       )}
     >
@@ -52,5 +48,21 @@ export function GradeBadge({ grade }: { grade: string }) {
 
 export function SeverityBadge({ severity }: { severity: string }) {
   const variant = severity as StatusBadgeProps['variant'];
-  return <StatusBadge variant={VARIANTS[variant] ? variant : 'neutral'}>{severity}</StatusBadge>;
+  return (
+    <StatusBadge variant={VARIANTS[variant] ? variant : 'neutral'}>
+      <span
+        className={cn(
+          'size-1.5 rounded-full',
+          variant === 'critical' || variant === 'high'
+            ? 'bg-danger'
+            : variant === 'medium'
+              ? 'bg-amber-500'
+              : variant === 'low'
+                ? 'bg-cyan'
+                : 'bg-muted-foreground'
+        )}
+      />
+      {severity}
+    </StatusBadge>
+  );
 }

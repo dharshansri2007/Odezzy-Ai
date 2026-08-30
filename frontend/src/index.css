@@ -70,28 +70,30 @@
 }
 
 .light {
-  --background: oklch(0.985 0.002 285);
-  --foreground: oklch(0.18 0.01 285);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.01 285);
-  --elevated: oklch(0.965 0.003 285);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.01 285);
-  --primary: oklch(0.62 0.13 210);
-  --primary-foreground: oklch(0.99 0 0);
-  --secondary: oklch(0.94 0.004 285);
-  --secondary-foreground: oklch(0.2 0.01 285);
-  --muted: oklch(0.94 0.004 285);
-  --muted-foreground: oklch(0.46 0.01 285);
-  --accent: oklch(0.55 0.19 292);
-  --accent-foreground: oklch(0.99 0 0);
-  --brand-cyan: oklch(0.68 0.13 205);
-  --brand-violet: oklch(0.55 0.19 292);
-  --danger: oklch(0.55 0.21 25);
-  --safe: oklch(0.55 0.16 148);
-  --border: oklch(0.18 0.01 285 / 12%);
-  --input: oklch(0.18 0.01 285 / 16%);
-  --shadow-lift: 0 18px 50px -28px oklch(0.2 0.02 285 / 0.35);
+  /* Warm cream palette — intentionally not stark white, so large surfaces
+     don't glare and cards read as a distinct, lifted layer. */
+  --background: oklch(0.965 0.014 84);
+  --foreground: oklch(0.22 0.014 55);
+  --card: oklch(0.995 0.008 84);
+  --card-foreground: oklch(0.22 0.014 55);
+  --elevated: oklch(0.935 0.018 82);
+  --popover: oklch(0.995 0.008 84);
+  --popover-foreground: oklch(0.22 0.014 55);
+  --primary: oklch(0.58 0.13 210);
+  --primary-foreground: oklch(0.99 0.004 84);
+  --secondary: oklch(0.925 0.02 80);
+  --secondary-foreground: oklch(0.24 0.014 55);
+  --muted: oklch(0.925 0.02 80);
+  --muted-foreground: oklch(0.48 0.022 65);
+  --accent: oklch(0.53 0.19 292);
+  --accent-foreground: oklch(0.99 0.004 84);
+  --brand-cyan: oklch(0.62 0.13 205);
+  --brand-violet: oklch(0.53 0.19 292);
+  --danger: oklch(0.54 0.21 25);
+  --safe: oklch(0.53 0.15 148);
+  --border: oklch(0.32 0.03 60 / 12%);
+  --input: oklch(0.32 0.03 60 / 16%);
+  --shadow-lift: 0 18px 50px -28px oklch(0.32 0.04 60 / 0.28);
 }
 
 @layer base {
@@ -169,10 +171,100 @@
       transparent 4px
     );
   }
+
+  /* Dashboard mount-in: staggered fade + rise, driven by --stagger index. */
+  .fade-up {
+    opacity: 0;
+    transform: translateY(10px);
+    animation: fade-up 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    animation-delay: calc(var(--stagger, 0) * 60ms);
+  }
+  @keyframes fade-up {
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  /* Skeleton shimmer for loading states. */
+  .skeleton {
+    position: relative;
+    overflow: hidden;
+    background: var(--color-elevated);
+    border-radius: var(--radius-lg);
+  }
+  .skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--foreground) 6%, transparent),
+      transparent
+    );
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+  @keyframes shimmer {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  /* Subtle ambient pulse for "live" indicators (log tail, active scan). */
+  .pulse-dot {
+    position: relative;
+  }
+  .pulse-dot::before {
+    content: '';
+    position: absolute;
+    inset: -3px;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.35;
+    animation: pulse-ring 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes pulse-ring {
+    0% {
+      transform: scale(0.8);
+      opacity: 0.45;
+    }
+    70%,
+    100% {
+      transform: scale(1.9);
+      opacity: 0;
+    }
+  }
+
+  /* Count-tick used by numeric stat values when they refresh. */
+  .num-tick {
+    animation: num-tick 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes num-tick {
+    0% {
+      opacity: 0.4;
+      transform: translateY(3px);
+    }
+    100% {
+      opacity: 1;
+      transform: none;
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   .reveal { opacity: 1; transform: none; transition: none; }
   .lift:hover { transform: none; }
+  .fade-up {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+  .skeleton::after,
+  .pulse-dot::before,
+  .num-tick {
+    animation: none;
+  }
 }
