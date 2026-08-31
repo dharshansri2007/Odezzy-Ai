@@ -72,12 +72,12 @@
 .light {
   /* Warm cream palette — intentionally not stark white, so large surfaces
      don't glare and cards read as a distinct, lifted layer. */
-  --background: oklch(0.965 0.014 84);
+  --background: oklch(0.95 0.024 78);
   --foreground: oklch(0.22 0.014 55);
-  --card: oklch(0.995 0.008 84);
+  --card: oklch(0.98 0.018 80);
   --card-foreground: oklch(0.22 0.014 55);
-  --elevated: oklch(0.935 0.018 82);
-  --popover: oklch(0.995 0.008 84);
+  --elevated: oklch(0.915 0.026 76);
+  --popover: oklch(0.98 0.018 80);
   --popover-foreground: oklch(0.22 0.014 55);
   --primary: oklch(0.58 0.13 210);
   --primary-foreground: oklch(0.99 0.004 84);
