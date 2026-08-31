@@ -48,7 +48,7 @@ export function redactConfig(config: OdezzyConfig): OdezzyConfig {
 export class SessionStore {
   private readonly sessionsDir: string;
 
-  constructor(sessionsDir: string = '.odezzy/sessions') {
+  constructor(sessionsDir: string = process.env.ODEZZY_SESSIONS_DIR ?? '.odezzy/sessions') {
     this.sessionsDir = path.resolve(process.cwd(), sessionsDir);
   }
 

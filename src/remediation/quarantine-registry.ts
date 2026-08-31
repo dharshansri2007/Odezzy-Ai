@@ -1,10 +1,12 @@
+import { readFile } from 'node:fs/promises';
 import { createLogger } from '../utils/logger.js';
 import { HashChainedLog } from '../utils/hash-chained-log.js';
 import type { HumanApprovalToken } from './human-approval-token.js';
 import type { QuarantineRecord } from '../types/index.js';
 
 const logger = createLogger('quarantine-registry');
-const REGISTRY_PATH = '.odezzy/quarantine.jsonl';
+const REGISTRY_PATH = process.env.QUARANTINE_REGISTRY_PATH ?? '.odezzy/quarantine.jsonl';
+const LEGACY_REGISTRY_PATH = process.env.QUARANTINE_LEGACY_PATH ?? '.odezzy/quarantine.json';
 
 /**
  * Append-only, hash-chained quarantine log (see utils/hash-chained-log.ts —
@@ -75,12 +77,42 @@ export class QuarantineRegistry {
 
   /** Called by discovery/analysis on every future scan to enforce the ban. */
   public async isQuarantined(toolName: string, serverName: string): Promise<boolean> {
-    const records = await this.log.readAll();
-    return records.some((r) => r.toolName === toolName && r.serverName === serverName);
+    const records = await this.readVerified();
+    if (records.some((r) => r.toolName === toolName && r.serverName === serverName)) {
+      return true;
+    }
+    return this.isQuarantinedInLegacyFile(toolName, serverName);
+  }
+
+  private async isQuarantinedInLegacyFile(toolName: string, serverName: string): Promise<boolean> {
+    try {
+      const raw = await readFile(LEGACY_REGISTRY_PATH, 'utf-8');
+      const entries: { toolName: string; serverName: string }[] = JSON.parse(raw);
+      return entries.some((e) => e.toolName === toolName && e.serverName === serverName);
+    } catch {
+      return false;
+    }
   }
 
   /** Returns the full quarantine trail for the governance report / independent audit. */
   public async getFullLog(): Promise<QuarantineRecord[]> {
+    return this.readVerified();
+  }
+
+  /**
+   * Reads the chain only after confirming it's intact. A broken or
+   * truncated chain must never be silently treated as a complete, valid
+   * ban list — that would let a tampered log quietly un-quarantine a
+   * previously-banned tool.
+   */
+  private async readVerified(): Promise<QuarantineRecord[]> {
+    const integrity = await this.log.verifyChainIntegrity();
+    if (!integrity.valid) {
+      throw new Error(
+        `Quarantine log at ${REGISTRY_PATH} failed integrity verification (broken at record ${integrity.brokenAtIndex}). ` +
+        `Refusing to trust it as an authoritative ban list.`
+      );
+    }
     return this.log.readAll();
   }
 

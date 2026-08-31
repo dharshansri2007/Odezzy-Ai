@@ -6,7 +6,7 @@ import { HashChainedLog } from '../utils/hash-chained-log.js';
 import type { MCPToolSchema, VulnerabilityFinding, AttestationRecord } from '../types/index.js';
 
 const logger = createLogger('attestation-ledger');
-const LEDGER_DIR = '.odezzy/attestation';
+const LEDGER_DIR = process.env.ATTESTATION_LEDGER_DIR ?? '.odezzy/attestation';
 const KEYS_PATH = join(LEDGER_DIR, 'keys.json');
 const LOG_PATH = join(LEDGER_DIR, 'ledger.jsonl');
 

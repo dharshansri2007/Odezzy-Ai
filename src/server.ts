@@ -1,227 +1,190 @@
-#!/usr/bin/env node
-/**
- * Odezzy AI — Remediation Server
- * ===============================
- * A real MCP server exposing exactly one tool, `apply_fix`, that TrueForge
- * calls to actually apply an approved remediation (quarantine a tool +
- * revoke its attestation).
- *
- * This server does nothing dangerous on its own — it has no idea whether a
- * human approved anything. The safety property comes entirely from how this
- * server is registered on TrueForge's side: under Settings → Connectors,
- * with `requireApprovalForTools: ["@all"]` set. TrueForge itself refuses to
- * ever forward a call to this server's `apply_fix` handler until a human
- * clicks approve in TrueForge's own UI. The handler below running at all
- * *is* the proof of human approval — see
- * HumanApprovalToken.fromTrueForgeGatedToolCall() in
- * src/remediation/human-approval-token.ts for why that's minted here
- * instead of trusting a boolean flag passed in the tool call arguments
- * (which anyone — or anything — could set to true).
- *
- * TRANSPORT NOTE (Streamable HTTP, not stdio): earlier revisions of this
- * file used StdioServerTransport, on the assumption TrueForge's connector
- * UI could launch a local process via a command string. It can't — the
- * "Add MCP Server" dialog only accepts a URL pointing at a remote/HTTP MCP
- * endpoint (verified directly against that UI, not assumed). So this file
- * now serves the same tool over Streamable HTTP via Express — the current
- * (post-SSE) transport the MCP SDK ships for this exact case, per its own
- * docs at modelcontextprotocol/typescript-sdk. `sessionIdGenerator:
- * undefined` puts it in stateless mode: this server holds no per-client
- * session state (SessionStore/QuarantineRegistry/AttestationLedger are all
- * already their own persistence layer on disk), so there's nothing a
- * session would need to track between requests.
- *
- * Setup (Job 3 — manual, on TrueForge's platform, not scriptable from here):
- *   1. Run this server: `npm run remediation-server` (see package.json —
- *      listens on REMEDIATION_SERVER_PORT, default 8791).
- *   2. Make that port reachable from wherever TrueForge itself runs. If
- *      TrueForge is remote (e.g. a *.cloudshell.dev session, as opposed to
- *      literally the same machine), `http://localhost:8791/mcp` is NOT
- *      reachable from TrueForge's side — localhost there means "the box
- *      TrueForge is running on," not this one. Use Cloud Shell's Web
- *      Preview / port-forwarding to get a URL TrueForge's environment can
- *      actually reach, then use THAT url below, not localhost.
- *   3. In TrueForge → Settings → Connectors → "+ Add MCP Server":
- *        Name: anything memorable, e.g. odezzy-remediation
- *        URL: http://<reachable-host>:8791/mcp
- *        Auth type: None (this server has no auth of its own yet — see
- *          the security note below before exposing this beyond a private
- *          Cloud Shell preview URL)
- *   4. Set requireApprovalForTools: ["@all"] on that connector.
- *   5. Set that same connector name as REMEDIATION_MCP_SERVER_NAME in your
- *      .env (see src/config/parser.ts).
- *   6. Run `npm run fullscan` — a finding with an autoFixable proposal will
- *      now genuinely pause in TrueForge's UI instead of failing closed.
- *
- * SECURITY NOTE: unlike stdio (where only a process on this machine could
- * ever talk to this server), an HTTP endpoint is reachable by anything that
- * can reach the port — the approval-token safety property in ApplyFix still
- * holds (nothing here trusts a boolean the caller sends), but
- * "TrueForge itself refuses to call this until a human approves" is only
- * true if TrueForge is in fact the only thing that can reach this URL.
- * Do not expose this port publicly without adding real auth (a bearer
- * token check, same shape as src/server.ts's requireApiToken) first —
- * this initial version deliberately does not add that yet, to keep the
- * transport swap itself reviewable as its own change.
- */
+// src/server.ts — the dashboard API bridge between the backend's output
+// files and the browser. Read-only except for /api/approvals/resolve,
+// which is the one mutating route and is bearer-token gated.
+//
+// NOTE: this file is deliberately separate from remediation-server/server.ts.
+// A prior merge overwrote this file's actual content with a duplicate copy
+// of the remediation MCP server, which (a) deleted every dashboard route
+// below, and (b) exposed an unauthenticated endpoint that could trigger
+// real quarantine + attestation revocation from any HTTP client that could
+// reach the port. Restored here; the remediation server logic now lives
+// only in remediation-server/server.ts, on its own port, with its own auth.
+import express, { type Request, type Response } from 'express';
+import cors from 'cors';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createLogger } from './utils/logger.js';
+import { buildGraph } from './report/graph-builder.js';
+import { RiskCalculator } from './scoring/risk-formula.js';
+import { ApprovalGate } from './remediation/approval-gate.js';
+import { createTrueForgeClient } from './agent/trueforge-client.js';
+import { SessionStore } from './persistence/session-store.js';
+import { FixProposer } from './remediation/fix-proposer.js';
+import type { DiscoveryResult, MCPServerInventory, VulnerabilityFinding, RiskScore } from './types/index.js';
+import type { ScanSession } from './persistence/session-store.js';
 
-import express from 'express';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { SessionStore } from '../src/persistence/session-store.js';
-import { FixProposer } from '../src/remediation/fix-proposer.js';
-import { ApplyFix } from '../src/remediation/apply-fix.js';
-import { HumanApprovalToken } from '../src/remediation/human-approval-token.js';
-import type { VulnerabilityFinding } from '../src/types/index.js';
+const logger = createLogger('api-server');
+const app = express();
+const PORT = 4000;
 
-const APPLY_FIX_TOOL = {
-  name: 'apply_fix',
-  description:
-    'Applies an approved security remediation for a specific Odezzy AI finding — quarantines the ' +
-    'offending tool and revokes its cryptographic attestation. Only call this after a human has ' +
-    'reviewed and approved the specific finding id. This tool is registered with ' +
-    'requireApprovalForTools, so TrueForge itself will pause and ask a human before this handler ' +
-    'ever actually runs.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      findingId: { type: 'string', description: 'The id of the VulnerabilityFinding to remediate.' },
-    },
-    required: ['findingId'],
-  },
-};
+app.use(cors()); // dev-only convenience; Vite's proxy makes this mostly unnecessary but harmless
 
-/**
- * Finding ids are globally unique UUIDs minted fresh on every scan, so the
- * right session to search is whichever one actually contains this id — not
- * necessarily the most recent scan (a human might approve something from an
- * earlier run). Search newest-first since that's the common case, but check
- * all of them rather than assuming "latest" is always correct.
- */
-async function findFindingAcrossSessions(findingId: string): Promise<VulnerabilityFinding | null> {
-  const store = new SessionStore();
-  const sessionIds = await store.list();
-  // list() doesn't guarantee order; sort descending so newest sessions
-  // (higher/later ids, which session ids aren't inherently sortable by —
-  // so fall back to checking every session; this is O(n) in session count,
-  // which is fine at hackathon/dev scale) are checked without assuming.
-  for (const id of sessionIds) {
-    const session = await store.load(id);
-    const finding = session?.findings.find((f) => f.id === findingId);
-    if (finding) return finding;
-  }
-  return null;
+const REPORTS_DIR = '.odezzy/reports';
+const LEDGER_PATH = '.odezzy/attestation/ledger.jsonl';
+const SESSIONS_DIR = '.odezzy/sessions';
+
+// The one mutating route on this server (/api/approvals/resolve) requires
+// a shared secret set at process startup. Loopback binding alone stops
+// remote attackers, but not a malicious browser tab open on the same
+// machine — that's the class of attacker this token is actually for.
+// Refuse to accept mutating requests at all if this isn't configured,
+// rather than silently running unauthenticated.
+const API_TOKEN = process.env.ODEZZY_API_TOKEN;
+if (!API_TOKEN) {
+  logger.warn(
+    'ODEZZY_API_TOKEN is not set. /api/approvals/resolve will refuse all requests until it is. ' +
+    'Set ODEZZY_API_TOKEN in your environment before starting this server if you need that route.'
+  );
 }
 
-const server = new Server(
-  { name: 'odezzy-remediation-server', version: '0.1.0' },
-  { capabilities: { tools: {} } }
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [APPLY_FIX_TOOL],
-}));
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
-
-  if (name !== 'apply_fix') {
-    throw new Error(`Unknown tool: ${name}`);
+function requireApiToken(req: Request, res: Response, next: () => void) {
+  if (!API_TOKEN) {
+    return res.status(503).json({ error: 'Server has no ODEZZY_API_TOKEN configured — mutating routes are disabled.' });
   }
+  const header = req.header('Authorization');
+  const provided = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : undefined;
+  if (!provided || provided !== API_TOKEN) {
+    return res.status(401).json({ error: 'Missing or invalid Authorization: Bearer <token>.' });
+  }
+  next();
+}
 
-  const findingId = typeof args?.findingId === 'string' ? args.findingId : undefined;
-  if (!findingId) {
-    return {
-      content: [{ type: 'text', text: '[remediation-server] Error: findingId is required.' }],
-      isError: true,
+/** Finds the most recent .json report — filenames are ISO-timestamp prefixed, so alphabetical sort is chronological. */
+async function getLatestReportPath(): Promise<string | null> {
+  try {
+    const files = (await readdir(REPORTS_DIR)).filter(f => f.endsWith('.json')).sort();
+    return files.length > 0 ? join(REPORTS_DIR, files[files.length - 1]) : null;
+  } catch {
+    return null; // no reports yet — expected before the first scan, not an error
+  }
+}
+
+/** Loads every saved session from disk. Empty array if none exist yet — not an error state. */
+async function readAllSessions(): Promise<ScanSession[]> {
+  try {
+    const files = (await readdir(SESSIONS_DIR)).filter(f => f.endsWith('.json'));
+    return await Promise.all(
+      files.map(async (f) => JSON.parse(await readFile(join(SESSIONS_DIR, f), 'utf-8')) as ScanSession)
+    );
+  } catch {
+    return [];
+  }
+}
+
+app.get('/api/latest-scan', async (_req: Request, res: Response) => {
+  const path = await getLatestReportPath();
+  if (!path) {
+    return res.status(404).json({ error: 'No scan reports found yet. Run npm run fullscan first.' });
+  }
+  try {
+    const raw = await readFile(path, 'utf-8');
+    res.json(JSON.parse(raw));
+  } catch (err) {
+    logger.error('Failed to read latest report', err);
+    res.status(500).json({ error: 'Failed to read report file' });
+  }
+});
+
+app.get('/api/ledger', async (_req: Request, res: Response) => {
+  try {
+    const raw = await readFile(LEDGER_PATH, 'utf-8');
+    const records = raw
+      .split('\n')
+      .filter(line => line.trim().length > 0)
+      .map(line => JSON.parse(line));
+    res.json(records);
+  } catch {
+    res.json([]); // no ledger yet is a valid empty state, not an error — frontend should handle an empty array gracefully
+  }
+});
+
+app.get('/api/sessions', async (_req: Request, res: Response) => {
+  const sessions = await readAllSessions();
+  const safe = sessions
+    .map((s) => ({
+      ...s,
+      configSnapshot: s.configSnapshot ? { ...s.configSnapshot, geminiApiKey: undefined } : s.configSnapshot,
+    }))
+    .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''));
+  res.json(safe);
+});
+
+app.get('/api/graph', async (_req: Request, res: Response) => {
+  const path = await getLatestReportPath();
+  if (!path) {
+    return res.status(404).json({ error: 'No scan reports found yet.' });
+  }
+  try {
+    const report = JSON.parse(await readFile(path, 'utf-8'));
+
+    const servers: MCPServerInventory[] = report.inventories ?? [];
+    const findings: VulnerabilityFinding[] = report.findings ?? [];
+    const discovery: DiscoveryResult = {
+      servers,
+      totalTools: servers.reduce((sum, s) => sum + s.tools.length, 0),
+      timestamp: report.scanCompletedAt ?? new Date().toISOString(),
     };
+    const scores: RiskScore[] = servers.map((s) =>
+      RiskCalculator.calculate(
+        s.serverName,
+        'server',
+        findings.filter((f) => f.serverName === s.serverName)
+      )
+    );
+
+    const graph = buildGraph(discovery, findings, scores);
+    res.json(graph);
+  } catch (err) {
+    logger.error('Failed to build graph from latest scan', err);
+    res.status(500).json({ error: 'Failed to build graph' });
+  }
+});
+
+app.post('/api/approvals/resolve', requireApiToken, express.json(), async (req: Request, res: Response) => {
+  const { sessionId, toolCallId, threadId, findingId, approved, reason, lastTurnId } = req.body ?? {};
+
+  if (typeof sessionId !== 'string' || typeof findingId !== 'string' || typeof toolCallId !== 'string' || typeof threadId !== 'string' || typeof approved !== 'boolean') {
+    return res.status(400).json({ error: 'sessionId, findingId, toolCallId, threadId (strings) and approved (boolean) are all required.' });
   }
 
-  const finding = await findFindingAcrossSessions(findingId);
+  const session = await new SessionStore().load(sessionId);
+  if (!session) {
+    return res.status(404).json({ error: `No session found with id ${sessionId}.` });
+  }
+
+  const finding = session.findings.find((f) => f.id === findingId);
   if (!finding) {
-    return {
-      content: [{ type: 'text', text: `[remediation-server] No finding found with id ${findingId} in any saved session.` }],
-      isError: true,
-    };
+    return res.status(404).json({ error: `No finding with id ${findingId} in session ${sessionId}.` });
   }
 
   const proposal = new FixProposer().proposeFixes([finding])[0];
-  if (!proposal.autoFixable) {
-    return {
-      content: [{ type: 'text', text: `[remediation-server] Finding "${finding.title}" (category: ${finding.category}) is not eligible for automated quarantine.` }],
-      isError: true,
-    };
+
+  try {
+    const client = createTrueForgeClient({} as any);
+    const gate = new ApprovalGate(client, sessionId, lastTurnId);
+    const result = await gate.resolveApproval({ toolCallId, threadId, approved, reason, proposal, finding });
+    res.json(result);
+  } catch (err) {
+    logger.error('Failed to resolve approval', err);
+    res.status(500).json({ error: 'Failed to resolve approval.' });
   }
-
-  // This handler only ever runs because TrueForge itself refused to call
-  // it until a human approved the pending tool call — that's the whole
-  // point of requireApprovalForTools. The token below documents that,
-  // rather than trusting anything in `args`.
-  const token = HumanApprovalToken.fromTrueForgeGatedToolCall(finding.id);
-  const result = await new ApplyFix().apply(proposal, finding, token);
-
-  if (!result.applied) {
-    return {
-      content: [{ type: 'text', text: `[remediation-server] Failed to apply fix: ${result.error}` }],
-      isError: true,
-    };
-  }
-
-  return {
-    content: [{ type: 'text', text: `[remediation-server] ${result.detail}` }],
-  };
 });
 
-/**
- * Stateless Streamable HTTP setup: one shared MCP `Server`/`transport` pair
- * handles every request. This is deliberate, not a shortcut — this server
- * has no per-client state to isolate (every tool call reads/writes the
- * same on-disk SessionStore/QuarantineRegistry/AttestationLedger
- * regardless of which client asked), so per-session transport bookkeeping
- * (the `transports: Record<string, StreamableHTTPServerTransport>` map
- * you'll see in most MCP HTTP examples) would add complexity without
- * adding safety here. `sessionIdGenerator: undefined` is the SDK's
- * documented way to opt into this stateless mode.
- */
-async function main() {
-  const port = Number(process.env.REMEDIATION_SERVER_PORT ?? 8791);
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await server.connect(transport);
+export { app };
 
-  const app = express();
-  app.use(express.json());
-
-  app.post('/mcp', async (req, res) => {
-    try {
-      await transport.handleRequest(req, res, req.body);
-    } catch (err) {
-      console.error('[remediation-server] error handling POST /mcp:', err);
-      if (!res.headersSent) {
-        res.status(500).json({
-          jsonrpc: '2.0',
-          error: { code: -32603, message: 'Internal server error' },
-          id: null,
-        });
-      }
-    }
-  });
-
-  // GET/DELETE on /mcp are part of the Streamable HTTP spec (server-push
-  // and clean session teardown respectively) but aren't required for the
-  // single-tool, stateless case here. Respond 405 rather than silently
-  // 404ing, so a client relying on them gets an honest "not supported"
-  // instead of an ambiguous not-found.
-  app.get('/mcp', (_req, res) => res.status(405).json({ error: 'This server is stateless; GET /mcp is not supported.' }));
-  app.delete('/mcp', (_req, res) => res.status(405).json({ error: 'This server is stateless; DELETE /mcp is not supported.' }));
-
-  app.listen(port, () => {
-    console.error(`[remediation-server] listening on http://localhost:${port}/mcp (Streamable HTTP, stateless)`);
-    console.error('[remediation-server] if TrueForge runs remotely (e.g. Cloud Shell), point its connector at a URL that can actually reach this port — not localhost from TrueForge\'s side.');
+const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMain) {
+  app.listen(PORT, '127.0.0.1', () => {
+    logger.info(`Odezzy API server running on http://127.0.0.1:${PORT} (loopback only)`);
   });
 }
-
-main().catch((err) => {
-  console.error('[remediation-server] fatal:', err);
-  process.exit(1);
-});
